@@ -18,6 +18,10 @@
   let autoFill = true;
   let showAllAttrs = true;
   let maxLimit = Object.fromEntries(ATTRS.map((a) => [a, ""]));
+  /** 自動配優先順序：數字愈小愈優先（1 最高） */
+  let attrPriority = Object.fromEntries(ATTRS.map((a, i) => [a, i + 1]));
+  /** 強化次數上限（可強化總輪數） */
+  let maxEnhanceCount = "";
   let sourceTrace = { attr: null, global: false, ri: null };
   let floatVisible = false;
 
@@ -57,18 +61,169 @@
     return cap;
   }
 
+  /** 屬性是否有設定有效上限 */
+  function getAttrLimit(attr) {
+    if (maxLimit[attr] === "" || maxLimit[attr] == null) return null;
+    const lim = Number(maxLimit[attr]);
+    if (!Number.isFinite(lim) || lim < 0) return null;
+    return lim;
+  }
+
+  /**
+   * 強化規則：目前累計 < 上限 → 本輪仍可強化（可一次加滿零件加成、允許超限）
+   * 目前累計 ≥ 上限 → 本輪起不可再強化該屬性
+   */
+  function canEnhanceAttr(currentTotal, attr) {
+    const lim = getAttrLimit(attr);
+    if (lim == null) return true;
+    return (currentTotal || 0) < lim;
+  }
+
+  function prevTotalsBefore(roundIndex) {
+    if (roundIndex <= 0) {
+      return Object.fromEntries(ATTRS.map((a) => [a, 0]));
+    }
+    return totalsAtRound(roundIndex - 1);
+  }
+
   function autoFillRound(roundIndex) {
     const round = rounds[roundIndex];
     const cap = roundPartCap(round);
-    // 拆分模式：本輪增量 = 零件上限加總
-    // 累計模式：本輪總值 = 前輪總值 + 零件上限加總
-    let base = Object.fromEntries(ATTRS.map((a) => [a, 0]));
-    if (cumulativeMode && roundIndex > 0) {
-      base = { ...rounds[roundIndex - 1].values };
-    }
+    const prev = prevTotalsBefore(roundIndex);
+    // 拆分模式：本輪增量 = 可強化屬性的零件上限加總
+    // 累計模式：本輪總值 = 前輪總值 + 可強化增量
     for (const a of ATTRS) {
       if (round.locks[a]) continue;
-      round.values[a] = (base[a] || 0) + (cap[a] || 0);
+      const can = canEnhanceAttr(prev[a] || 0, a);
+      const delta = can ? cap[a] || 0 : 0;
+      if (cumulativeMode) {
+        round.values[a] = (prev[a] || 0) + delta;
+      } else {
+        round.values[a] = delta;
+      }
+    }
+  }
+
+  function priorityWeight(attr) {
+    const p = Number(attrPriority[attr]);
+    if (!Number.isFinite(p) || p <= 0) return 0.01;
+    return 1 / p;
+  }
+
+  /** 評估零件對「有上限且尚可強化」屬性的貢獻分數（優先序愈高權重愈大） */
+  function scorePartForTotals(part, totals) {
+    let score = 0;
+    for (const a of ATTRS) {
+      const lim = getAttrLimit(a);
+      // 自動配只以有設上限的屬性為目標
+      if (lim == null) continue;
+      const bonus = part.bonus[a] || 0;
+      if (bonus <= 0) continue;
+      if (!canEnhanceAttr(totals[a] || 0, a)) continue;
+      const w = priorityWeight(a);
+      const remain = Math.max(0, lim - (totals[a] || 0));
+      score += bonus * w * 100;
+      score += Math.min(bonus, Math.max(remain, 1)) * w * 15;
+    }
+    return score;
+  }
+
+  /**
+   * 依次數上限、屬性上限、優先順序自動配置各輪零件與數值。
+   * 規則：同輪零件不重複；未達上限可再強且可超限；達上限後不可再強。
+   */
+  function runAutoAllocate() {
+    const maxR = Number(maxEnhanceCount);
+    if (!Number.isFinite(maxR) || maxR < 1) {
+      toast("請先設定強化次數上限（至少 1）");
+      $("#maxEnhanceCountInput")?.focus();
+      return;
+    }
+    if (maxR > 30) {
+      toast("強化次數上限請設在 30 以內");
+      return;
+    }
+
+    const hasAnyLimit = ATTRS.some((a) => getAttrLimit(a) != null);
+    if (!hasAnyLimit) {
+      toast("請至少設定一個屬性「上限」，自動配才有目標");
+      return;
+    }
+
+    const hasData = rounds.some(
+      (r) => r.parts.some((p) => p !== "" && p != null) || r.note
+    );
+    if (hasData && !confirm("自動配會重算並取代目前所有輪次，是否繼續？")) {
+      return;
+    }
+
+    const partList = Object.values(PARTS);
+    let totals = Object.fromEntries(ATTRS.map((a) => [a, 0]));
+    const newRounds = [];
+
+    for (let r = 0; r < maxR; r++) {
+      // 目標屬性（有設上限）皆已達標/封頂則提早結束
+      const activeTargets = ATTRS.filter(
+        (a) => getAttrLimit(a) != null && canEnhanceAttr(totals[a] || 0, a)
+      );
+      if (!activeTargets.length) break;
+
+      const chosen = [];
+      const used = new Set();
+      for (let slot = 0; slot < SLOTS; slot++) {
+        let best = null;
+        let bestScore = 0;
+        for (const p of partList) {
+          if (used.has(p.id)) continue;
+          const s = scorePartForTotals(p, totals);
+          if (s > bestScore) {
+            bestScore = s;
+            best = p;
+          }
+        }
+        if (!best || bestScore <= 0) break;
+        chosen.push(best.id);
+        used.add(best.id);
+      }
+
+      if (!chosen.length) break;
+
+      const round = emptyRound();
+      round.parts = Array(SLOTS)
+        .fill("")
+        .map((_, i) => chosen[i] ?? "");
+      const cap = roundPartCap(round);
+      const delta = Object.fromEntries(ATTRS.map((a) => [a, 0]));
+      for (const a of ATTRS) {
+        if (canEnhanceAttr(totals[a] || 0, a)) {
+          delta[a] = cap[a] || 0;
+          totals[a] = (totals[a] || 0) + delta[a];
+        }
+      }
+      if (cumulativeMode) {
+        round.values = { ...totals };
+      } else {
+        round.values = { ...delta };
+      }
+      round.note = `自動配 #${r + 1}`;
+      newRounds.push(round);
+    }
+
+    if (!newRounds.length) {
+      toast("無法自動配置：請檢查上限與零件資料");
+      return;
+    }
+
+    rounds = newRounds;
+    renderAll();
+    toast(`自動配完成：共 ${rounds.length} 輪`);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function syncEnhanceCountInput() {
+    const el = $("#maxEnhanceCountInput");
+    if (el && el.value !== String(maxEnhanceCount)) {
+      el.value = maxEnhanceCount;
     }
   }
 
@@ -112,20 +267,56 @@
     return `${p.name}${marks ? "（" + marks + "）" : ""}`;
   }
 
-  function partOptionsHtml(selected, filter) {
+  /**
+   * 同一輪內已選零件 id（字串），可排除指定欄位（該欄目前選擇仍可顯示）。
+   * @param {(string|number)[]} parts
+   * @param {number} [excludeSlot]
+   */
+  function takenPartIds(parts, excludeSlot) {
+    const taken = new Set();
+    parts.forEach((id, i) => {
+      if (id === "" || id == null) return;
+      if (excludeSlot !== undefined && i === excludeSlot) return;
+      taken.add(String(id));
+    });
+    return taken;
+  }
+
+  /** 同一輪不可重複：保留第一次出現，其餘重複欄清空 */
+  function dedupeRoundParts(round) {
+    const seen = new Set();
+    let changed = false;
+    round.parts = round.parts.map((id) => {
+      if (id === "" || id == null) return "";
+      const key = String(id);
+      if (seen.has(key)) {
+        changed = true;
+        return "";
+      }
+      seen.add(key);
+      return id;
+    });
+    return changed;
+  }
+
+  function partOptionsHtml(selected, filter, takenIds) {
+    const taken = takenIds || new Set();
     const list = Object.values(PARTS);
     const filtered = filter
       ? list.filter((p) => (p.bonus[filter] || 0) > 0)
       : list;
     const opts = ['<option value="">— 選擇零件 —</option>'];
-    const seen = new Set();
+    const listed = new Set();
     for (const p of filtered) {
-      seen.add(String(p.id));
-      const sel = String(selected) === String(p.id) ? " selected" : "";
+      const id = String(p.id);
+      // 本輪其他欄已選的零件不出現；目前此欄已選的仍保留
+      if (taken.has(id) && id !== String(selected || "")) continue;
+      listed.add(id);
+      const sel = String(selected) === id ? " selected" : "";
       opts.push(`<option value="${p.id}"${sel}>${partOptionLabel(p)}</option>`);
     }
     // 篩選時仍保留目前已選但不符條件的零件
-    if (selected && !seen.has(String(selected)) && PARTS[String(selected)]) {
+    if (selected && !listed.has(String(selected)) && PARTS[String(selected)]) {
       const p = PARTS[String(selected)];
       opts.push(
         `<option value="${p.id}" selected>${partOptionLabel(p)}（目前選擇）</option>`
@@ -136,10 +327,15 @@
 
   function renderRounds() {
     const root = $("#rounds");
+    const countHint =
+      maxEnhanceCount !== "" && Number(maxEnhanceCount) > 0
+        ? ` / ${maxEnhanceCount}`
+        : "";
     root.innerHTML = rounds
       .map((round, ri) => {
         const cap = roundPartCap(round);
         const delta = roundDelta(ri);
+        const prev = prevTotalsBefore(ri);
         const selects = round.parts
           .map((pid, si) => {
             let cls = "";
@@ -149,16 +345,23 @@
                 sourceTrace.global || sourceTrace.ri === ri;
               if (inScope && b && b[sourceTrace.attr] > 0) cls = " source-hit";
             }
+            const taken = takenPartIds(round.parts, si);
             return `<select data-ri="${ri}" data-si="${si}" class="part-select${cls}">${partOptionsHtml(
               pid,
-              filterAttr
+              filterAttr,
+              taken
             )}</select>`;
           })
           .join("");
 
         const attrItems = ATTRS.map((a) => {
-          const gain = cap[a] || 0;
-          const hidden = !showAllAttrs && gain === 0 && !(round.values[a] > 0);
+          const sealed = !canEnhanceAttr(prev[a] || 0, a);
+          const gain = sealed ? 0 : cap[a] || 0;
+          const hidden =
+            !showAllAttrs &&
+            gain === 0 &&
+            !(round.values[a] > 0) &&
+            !sealed;
           if (hidden) return "";
           const displayVal = cumulativeMode
             ? round.values[a] || 0
@@ -168,20 +371,25 @@
             sourceTrace.attr === a
               ? " source-hit"
               : "";
+          const sealedCls = sealed ? " sealed" : "";
+          const capText = sealed ? "已封" : `≤${gain}`;
+          const capTitle = sealed
+            ? "已達屬性上限，本輪不可再強化"
+            : "點擊鎖定/解鎖";
           return `
-            <div class="attr-item${zero}${src}" data-attr="${a}">
+            <div class="attr-item${zero}${src}${sealedCls}" data-attr="${a}">
               <span class="attr-label" data-attr="${a}" data-ri="${ri}" title="點擊追蹤來源">${SHORT[a]}</span>
               <input class="attr-input${round.locks[a] ? " locked" : ""}"
                 type="number" data-ri="${ri}" data-attr="${a}" value="${displayVal}" />
-              <em class="attr-cap${round.locks[a] ? " locked" : ""}"
-                data-ri="${ri}" data-attr="${a}" title="點擊鎖定/解鎖">≤${gain}</em>
+              <em class="attr-cap${round.locks[a] ? " locked" : ""}${sealed ? " sealed-cap" : ""}"
+                data-ri="${ri}" data-attr="${a}" title="${capTitle}">${capText}</em>
             </div>`;
         }).join("");
 
         return `
           <div class="round-card" data-ri="${ri}">
             <div class="round-head">
-              <span class="round-number">強化 ${ri + 1}</span>
+              <span class="round-number">強化 ${ri + 1}${countHint}</span>
               <div class="part-selects">${selects}</div>
               <input class="note-input" data-ri="${ri}" placeholder="備註" value="${escapeAttr(
                 round.note
@@ -232,6 +440,7 @@
       const hasLim = maxLimit[a] !== "" && Number.isFinite(lim) && lim >= 0;
       const pct = hasLim && lim > 0 ? Math.min(100, (val / lim) * 100) : Math.min(100, (val / maxBase) * 100);
       const reached = hasLim && val >= lim && lim > 0;
+      const pri = attrPriority[a] ?? "";
       return `
         <div class="summary-item">
           <div class="summary-label${filterAttr === a ? " active" : ""}" data-filter="${a}">${a}</div>
@@ -241,11 +450,16 @@
           <div class="summary-value${reached ? " reached" : ""}">${val}</div>
           <div class="limit-box">
             <span>上限</span>
-            <input class="limit-input${hasLim ? "" : ""}" type="number" data-limit="${a}" value="${maxLimit[a]}" placeholder="—" />
+            <input class="limit-input" type="number" data-limit="${a}" value="${maxLimit[a]}" placeholder="—" min="0" />
+          </div>
+          <div class="priority-box">
+            <span>優先</span>
+            <input class="priority-input" type="number" data-priority="${a}" value="${pri}" min="1" max="99" title="數字愈小愈優先" />
           </div>
         </div>`;
     }).join("");
 
+    syncEnhanceCountInput();
     renderFloat(total);
   }
 
@@ -275,6 +489,7 @@
     renderRounds();
     renderSummary();
     updateToolbarLabels();
+    syncEnhanceCountInput();
   }
 
   function updateToolbarLabels() {
@@ -288,9 +503,21 @@
 
   function bindStatic() {
     $("#addRoundBtn").addEventListener("click", () => {
+      const maxR = Number(maxEnhanceCount);
+      if (Number.isFinite(maxR) && maxR > 0 && rounds.length >= maxR) {
+        toast(`已達強化次數上限（${maxR} 次）`);
+        return;
+      }
       const r = emptyRound();
       rounds.push(r);
       renderAll();
+    });
+
+    $("#autoAllocBtn")?.addEventListener("click", runAutoAllocate);
+
+    $("#maxEnhanceCountInput")?.addEventListener("input", (e) => {
+      maxEnhanceCount = e.target.value;
+      renderRounds();
     });
 
     $("#modeToggleBtn").addEventListener("click", () => {
@@ -362,7 +589,10 @@
 
     $("#summary-panel").addEventListener("click", (e) => {
       if (e.target.closest(".limit-input")) return;
+      if (e.target.closest(".priority-input")) return;
+      if (e.target.closest(".auto-alloc-bar")) return;
       if (e.target.closest(".summary-label")) return;
+      if (e.target.closest("button")) return;
       floatVisible = !floatVisible;
       renderSummary();
     });
@@ -376,7 +606,15 @@
       const t = e.target;
       if (t.matches(".limit-input")) {
         maxLimit[t.dataset.limit] = t.value;
-        renderSummary();
+        // 上限變更會影響「已封」狀態與自動填充語意
+        if (autoFill) {
+          rounds.forEach((_, i) => autoFillRound(i));
+        }
+        renderAll();
+      }
+      if (t.matches(".priority-input")) {
+        const n = Number(t.value);
+        attrPriority[t.dataset.priority] = Number.isFinite(n) && n > 0 ? n : t.value;
       }
     });
     $("#summary").addEventListener("click", (e) => {
@@ -417,7 +655,14 @@
     if (t.matches(".part-select")) {
       const ri = +t.dataset.ri;
       const si = +t.dataset.si;
-      rounds[ri].parts[si] = t.value ? Number(t.value) : "";
+      const next = t.value ? Number(t.value) : "";
+      // 同一輪不可選重複零件
+      if (next !== "" && takenPartIds(rounds[ri].parts, si).has(String(next))) {
+        toast("同一輪強化不可重複選擇相同零件");
+        t.value = rounds[ri].parts[si] ? String(rounds[ri].parts[si]) : "";
+        return;
+      }
+      rounds[ri].parts[si] = next;
       if (autoFill) autoFillRound(ri);
       renderAll();
     }
@@ -465,6 +710,11 @@
         if (autoFill) autoFillRound(ri);
         renderAll();
       } else if (act === "insert") {
+        const maxR = Number(maxEnhanceCount);
+        if (Number.isFinite(maxR) && maxR > 0 && rounds.length >= maxR) {
+          toast(`已達強化次數上限（${maxR} 次）`);
+          return;
+        }
         rounds.splice(ri + 1, 0, emptyRound());
         renderAll();
       } else if (act === "delete") {
@@ -520,10 +770,12 @@
 
   function exportConfig() {
     const payload = {
-      version: 1,
+      version: 2,
       locale: "zh-TW",
       cumulativeMode,
       maxLimit,
+      attrPriority: { ...attrPriority },
+      maxEnhanceCount,
       rounds,
       exportedAt: new Date().toISOString(),
     };
@@ -547,24 +799,39 @@
       try {
         const data = JSON.parse(reader.result);
         if (!Array.isArray(data.rounds)) throw new Error("格式不正確");
-        rounds = data.rounds.map((r) => ({
-          parts: Array(SLOTS)
-            .fill("")
-            .map((_, i) => r.parts?.[i] ?? ""),
-          values: Object.fromEntries(
-            ATTRS.map((a) => [a, Number(r.values?.[a]) || 0])
-          ),
-          locks: Object.fromEntries(
-            ATTRS.map((a) => [a, !!r.locks?.[a]])
-          ),
-          note: r.note || "",
-        }));
+        let deduped = false;
+        rounds = data.rounds.map((r) => {
+          const round = {
+            parts: Array(SLOTS)
+              .fill("")
+              .map((_, i) => r.parts?.[i] ?? ""),
+            values: Object.fromEntries(
+              ATTRS.map((a) => [a, Number(r.values?.[a]) || 0])
+            ),
+            locks: Object.fromEntries(
+              ATTRS.map((a) => [a, !!r.locks?.[a]])
+            ),
+            note: r.note || "",
+          };
+          if (dedupeRoundParts(round)) deduped = true;
+          return round;
+        });
         if (typeof data.cumulativeMode === "boolean") {
           cumulativeMode = data.cumulativeMode;
         }
         if (data.maxLimit) maxLimit = { ...maxLimit, ...data.maxLimit };
+        if (data.attrPriority) {
+          attrPriority = { ...attrPriority, ...data.attrPriority };
+        }
+        if (data.maxEnhanceCount != null && data.maxEnhanceCount !== undefined) {
+          maxEnhanceCount = data.maxEnhanceCount;
+        }
         renderAll();
-        toast("匯入成功");
+        toast(
+          deduped
+            ? "匯入成功（已移除同輪重複零件）"
+            : "匯入成功"
+        );
       } catch (err) {
         alert("匯入失敗：" + err.message);
       }
@@ -638,6 +905,8 @@
       desc,
       cumulativeMode,
       maxLimit: { ...maxLimit },
+      attrPriority: { ...attrPriority },
+      maxEnhanceCount,
       rounds: JSON.parse(JSON.stringify(rounds)),
       createdAt: new Date().toISOString(),
     });
@@ -689,10 +958,22 @@
         const p = loadPresets().find((x) => x.id === btn.dataset.load);
         if (!p) return;
         rounds = JSON.parse(JSON.stringify(p.rounds));
+        let deduped = false;
+        for (const r of rounds) {
+          if (dedupeRoundParts(r)) deduped = true;
+        }
         if (typeof p.cumulativeMode === "boolean") cumulativeMode = p.cumulativeMode;
         if (p.maxLimit) maxLimit = { ...maxLimit, ...p.maxLimit };
+        if (p.attrPriority) attrPriority = { ...attrPriority, ...p.attrPriority };
+        if (p.maxEnhanceCount != null && p.maxEnhanceCount !== undefined) {
+          maxEnhanceCount = p.maxEnhanceCount;
+        }
         renderAll();
-        toast(`已載入：${p.ship}`);
+        toast(
+          deduped
+            ? `已載入：${p.ship}（已移除同輪重複零件）`
+            : `已載入：${p.ship}`
+        );
         window.scrollTo({ top: 0, behavior: "smooth" });
       });
     });

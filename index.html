@@ -49,6 +49,9 @@
                 <button type="button" id="autoFillBtn" class="btn-primary">
                   自動填充: ON
                 </button>
+                <button type="button" id="autoAllocBtn" class="btn-orange">
+                  🎯 自動配
+                </button>
                 <input
                   type="file"
                   id="importFile"
@@ -68,9 +71,25 @@
               📖 使用說明
             </button>
           </div>
+          <div class="auto-alloc-bar">
+            <label class="enhance-count-label">
+              強化次數上限
+              <input
+                type="number"
+                id="maxEnhanceCountInput"
+                min="1"
+                max="30"
+                placeholder="例：5"
+                title="船隻可強化的總輪次數"
+              />
+            </label>
+            <span class="hint-inline"
+              >自動配依「優先」+「上限」：未達上限可再強（本輪可超限），剛好達上限後下一輪不可再強該屬性</span
+            >
+          </div>
           <div id="summary" class="summary-list"></div>
           <p class="empty-hint" style="padding-top: 4px; font-size: 12px">
-            提示：點擊本區塊可開關右下角懸浮彙總窗；點屬性名可篩選零件。
+            提示：點擊本區塊可開關右下角懸浮彙總窗；點屬性名可篩選零件。上限右側「優先」數字愈小愈優先（1 最高）。
           </p>
         </section>
 
@@ -157,6 +176,18 @@
           <p>
             <strong>10. 篩選：</strong>
             頂部屬性按鈕可篩選零件下拉選單，只顯示對該屬性有加成的材料。
+          </p>
+          <p>
+            <strong>11. 不可重複零件：</strong>
+            同一輪強化的 4 個零件欄不能選相同零件；不同輪次之間則可重複。
+          </p>
+          <p>
+            <strong>12. 屬性上限與強化規則：</strong>
+            彙總區可填各屬性「上限」。若目前累計 &lt; 上限，下一輪仍可強化該屬性，且本輪可依零件加滿（可超過上限，例如上限 85、目前 84，仍可 +52）。若累計已 ≥ 上限，下一輪該屬性不可再強化。
+          </p>
+          <p>
+            <strong>13. 強化次數上限 + 自動配：</strong>
+            設定可強化總輪數後按「自動配」：依各屬性「優先」（數字愈小愈優先）與上限，自動選不重複零件並排出各輪配置。
           </p>
         </div>
         <div class="modal-actions">
