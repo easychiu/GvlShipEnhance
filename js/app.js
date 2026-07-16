@@ -137,55 +137,98 @@
     return (round?.parts || []).filter((p) => p !== "" && p != null).length;
   }
 
-  /**
-   * 本輪規劃目標屬性：
-   * - priority：有填優先且尚未封頂
-   * - residual：優先都做完後，改衝「有上限且未封」的其餘屬性，用來用光強化次數
-   */
-  function planningAttrs(totals, mode) {
-    if (mode === "priority") {
-      return ATTRS.filter(
-        (a) => isAutoAllocTarget(a) && canEnhanceAttr(totals[a] || 0, a)
-      );
-    }
-    const limited = ATTRS.filter(
-      (a) => getAttrLimit(a) != null && canEnhanceAttr(totals[a] || 0, a)
-    );
-    if (limited.length) return limited;
+  /** 純帆（槳力上限 0）用六邊形；否則七邊形 */
+  function isPureSailProfile() {
+    return getAttrLimit("槳力") === 0;
+  }
+
+  function chartAttrs() {
+    if (isPureSailProfile()) return ATTRS.filter((a) => a !== "槳力");
+    return ATTRS.slice();
+  }
+
+  /** 仍可強化的屬性（只有達/超上限的不能強，其他照常） */
+  function enhanceableAttrs(totals) {
     return ATTRS.filter((a) => canEnhanceAttr(totals[a] || 0, a));
   }
 
-  function planWeight(attr, mode) {
-    if (mode === "priority") return priorityWeight(attr);
-    // 剩餘輪：愈高優先填「還差很多」的有上限屬性
-    const lim = getAttrLimit(attr);
-    if (lim == null) return 0.05;
-    return 1 + lim / 1000;
+  /**
+   * 本輪選零件時的「主攻」屬性（已封的排除，不整輪停掉）
+   */
+  function strategyFocusAttrs(totals, strategy) {
+    const open = enhanceableAttrs(totals);
+    if (!open.length) return [];
+
+    const priOpen = open.filter((a) => isAutoAllocTarget(a));
+    const limitedOpen = open.filter((a) => getAttrLimit(a) != null);
+
+    switch (strategy.id) {
+      case "burst":
+      case "park":
+      case "balanced":
+        if (priOpen.length) return priOpen;
+        return limitedOpen.length ? limitedOpen : open;
+      case "all-limit":
+        return limitedOpen.length ? limitedOpen : open;
+      case "tank": {
+        const tank = ["船耐", "護甲", "抗浪"].filter((a) => open.includes(a));
+        if (priOpen.length) return priOpen;
+        if (tank.length) return tank;
+        return limitedOpen.length ? limitedOpen : open;
+      }
+      default:
+        return priOpen.length ? priOpen : open;
+    }
   }
 
-  /**
-   * 評估固定 4 零件組合：堆疊期加滿後不可超過上限-1；決勝期最大化加成。
-   * mode = priority | residual
-   */
-  function scoreFixedFour(partIds, totals, roundsLeft, mode) {
-    const cap = roundPartCap({ parts: partIds });
-    const targets = planningAttrs(totals, mode);
-    if (!targets.length) return { valid: false, score: -1, cap };
+  function strategyWeight(attr, strategy, totals) {
+    const pri = getAutoPriority(attr);
+    const basePri = pri != null ? 1 / pri : 0.15;
+    const lim = getAttrLimit(attr);
+    const p = totals[attr] || 0;
+    const remain =
+      lim != null ? Math.max(0, lim - p) : 50;
 
+    switch (strategy.id) {
+      case "park":
+      case "burst":
+        return isAutoAllocTarget(attr) ? basePri * 3 : basePri * 0.4;
+      case "balanced":
+        return isAutoAllocTarget(attr) ? 1 : 0.2;
+      case "all-limit":
+        return (isAutoAllocTarget(attr) ? basePri * 2 : 0.5) * (1 + remain / 100);
+      case "tank": {
+        const tankBoost =
+          attr === "船耐" ? 2.2 : attr === "護甲" ? 1.8 : attr === "抗浪" ? 1.5 : 1;
+        return (
+          (isAutoAllocTarget(attr) ? basePri * 2.5 : 0.35) * tankBoost
+        );
+      }
+      default:
+        return basePri;
+    }
+  }
+
+  function scoreFixedFour(partIds, totals, roundsLeft, strategy) {
+    const cap = roundPartCap({ parts: partIds });
+    const focus = strategyFocusAttrs(totals, strategy);
+    if (!focus.length) return { valid: false, score: -1, cap };
+
+    const usePark = strategy.id !== "burst";
     let score = 0;
     let valid = true;
-    for (const a of targets) {
+
+    for (const a of focus) {
       const P = totals[a] || 0;
       const L = getAttrLimit(a);
       const C = cap[a] || 0;
-      const w = planWeight(a, mode);
-      // 無上限屬性：不控管堆疊，直接最大化
+      const w = strategyWeight(a, strategy, totals);
       if (L == null) {
         score += C * w * 50;
         continue;
       }
       const roomUnder = L - 1 - P;
-      const park = roundsLeft > 1 && roomUnder > 0;
+      const park = usePark && roundsLeft > 1 && roomUnder > 0;
       if (park) {
         if (P + C > L - 1) {
           valid = false;
@@ -195,22 +238,25 @@
         score += (C / Math.max(roomUnder, 1)) * w * 40;
       } else {
         score += C * w * 250;
+        if (P + C >= L) score += (P + C - L) * w * 20;
       }
+    }
+    // 輕微獎勵其它仍可強化屬性的順便加成
+    for (const a of enhanceableAttrs(totals)) {
+      if (focus.includes(a)) continue;
+      score += (cap[a] || 0) * strategyWeight(a, strategy, totals) * 8;
     }
     return { valid, score, cap };
   }
 
-  /**
-   * 窮舉 C(零件數, 4)：每輪必須剛好 4 個不同零件。
-   */
-  function pickBestFourParts(totals, roundsLeft, mode) {
+  function pickBestFourParts(totals, roundsLeft, strategy) {
     const all = Object.values(PARTS);
     const n = all.length;
     let best = null;
     let bestScore = -Infinity;
     let fallback = null;
     let fallbackScore = -Infinity;
-    const targets = planningAttrs(totals, mode);
+    const focus = strategyFocusAttrs(totals, strategy);
 
     for (let i = 0; i < n - 3; i++) {
       for (let j = i + 1; j < n - 2; j++) {
@@ -221,15 +267,15 @@
               ids,
               totals,
               roundsLeft,
-              mode
+              strategy
             );
             if (valid && score > bestScore) {
               bestScore = score;
               best = ids;
             }
             let fb = 0;
-            for (const a of targets) {
-              fb += (cap[a] || 0) * planWeight(a, mode);
+            for (const a of focus) {
+              fb += (cap[a] || 0) * strategyWeight(a, strategy, totals);
             }
             if (fb > fallbackScore) {
               fallbackScore = fb;
@@ -242,11 +288,196 @@
     return best || fallback;
   }
 
+  const AUTO_STRATEGIES = [
+    {
+      id: "park",
+      name: "穩健堆疊",
+      desc: "優先屬性先貼上限前一檔再超限；其餘未封屬性繼續配完次數",
+    },
+    {
+      id: "burst",
+      name: "激進決勝",
+      desc: "每輪最大化優先屬性加成，較早超限拉開差距",
+    },
+    {
+      id: "balanced",
+      name: "優先均衡",
+      desc: "有填優先的屬性盡量齊頭並進，避免單一屬性吃光輪次",
+    },
+    {
+      id: "all-limit",
+      name: "全上限兼顧",
+      desc: "所有有設上限且未封的屬性一併納入，優先仍略重",
+    },
+    {
+      id: "tank",
+      name: "生存向",
+      desc: "優先後偏重船耐／護甲／抗浪，偏坦度配置",
+    },
+  ];
+
   /**
-   * 自動配：盡量用光「強化次數上限」。
-   * 1) 先衝有優先的屬性（堆疊→超限決勝）
-   * 2) 優先都封頂後，繼續用剩餘次數衝其他有上限且未封的屬性
-   * 每輪固定 4 個不同零件；增量 = 零件加總（已封為 0）
+   * 模擬一組策略 → 完整輪次與最終總值。
+   * 規則：只有「該屬性」達/超上限才停該屬性；其它照強，盡量用光次數。
+   */
+  function simulateAutoPlan(strategy, maxR) {
+    let totals = Object.fromEntries(ATTRS.map((a) => [a, 0]));
+    const planRounds = [];
+
+    for (let r = 0; r < maxR; r++) {
+      const roundsLeft = maxR - r;
+      const open = enhanceableAttrs(totals);
+      // 沒有任何屬性能再強才停
+      if (!open.length) break;
+
+      const chosen = pickBestFourParts(totals, roundsLeft, strategy);
+      if (!chosen || chosen.length !== SLOTS) break;
+
+      const round = emptyRound();
+      round.parts = chosen.slice();
+      const cap = roundPartCap(round);
+      const delta = Object.fromEntries(ATTRS.map((a) => [a, 0]));
+
+      for (const a of ATTRS) {
+        // 僅略過已達/超上限的屬性
+        if (!canEnhanceAttr(totals[a] || 0, a)) {
+          delta[a] = 0;
+        } else {
+          delta[a] = cap[a] || 0;
+        }
+        totals[a] = (totals[a] || 0) + delta[a];
+      }
+
+      if (!ATTRS.some((a) => (delta[a] || 0) > 0)) break;
+
+      if (cumulativeMode) {
+        round.values = { ...totals };
+      } else {
+        round.values = { ...delta };
+      }
+      round.note = `${strategy.name} #${r + 1}`;
+      planRounds.push(round);
+    }
+
+    return {
+      strategy,
+      rounds: planRounds,
+      totals: { ...totals },
+      roundCount: planRounds.length,
+    };
+  }
+
+  function buildRadarSvg(totals) {
+    const axes = chartAttrs();
+    const n = axes.length;
+    const size = 168;
+    const cx = size / 2;
+    const cy = size / 2;
+    const R = size * 0.34;
+    const toXY = (i, ratio) => {
+      const ang = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+      const rr = R * Math.max(0, Math.min(1.15, ratio));
+      return [cx + rr * Math.cos(ang), cy + rr * Math.sin(ang)];
+    };
+
+    const gridLevels = [0.25, 0.5, 0.75, 1];
+    let grids = "";
+    for (const lv of gridLevels) {
+      const pts = axes
+        .map((_, i) => toXY(i, lv).join(","))
+        .join(" ");
+      grids += `<polygon points="${pts}" fill="none" stroke="rgba(0,0,0,0.08)" stroke-width="1"/>`;
+    }
+
+    let spokes = "";
+    let labels = "";
+    let dataPts = [];
+    axes.forEach((a, i) => {
+      const [x1, y1] = toXY(i, 1);
+      spokes += `<line x1="${cx}" y1="${cy}" x2="${x1}" y2="${y1}" stroke="rgba(0,0,0,0.1)" stroke-width="1"/>`;
+      const lim = getAttrLimit(a);
+      const val = totals[a] || 0;
+      const maxV = Math.max(lim != null && lim > 0 ? lim : 0, val, 1);
+      const ratio = val / maxV;
+      const [px, py] = toXY(i, ratio);
+      dataPts.push(`${px},${py}`);
+      const [lx, ly] = toXY(i, 1.22);
+      const reached = lim != null && val >= lim && lim > 0;
+      labels += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" font-size="10" fill="${
+        reached ? "#c92a2a" : "#334"
+      }" font-weight="${reached ? "700" : "600"}">${SHORT[a]}</text>`;
+    });
+
+    const poly = dataPts.join(" ");
+    return `<svg class="radar" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true">
+      ${grids}${spokes}
+      <polygon points="${poly}" fill="rgba(43,108,176,0.28)" stroke="#2b6cb0" stroke-width="2" stroke-linejoin="round"/>
+      ${labels}
+    </svg>`;
+  }
+
+  function formatPlanStats(totals, roundCount, maxR) {
+    const axes = chartAttrs();
+    const bits = axes.map((a) => {
+      const v = totals[a] || 0;
+      const lim = getAttrLimit(a);
+      const mark = lim != null && v >= lim && lim > 0 ? "✓" : "";
+      return `${SHORT[a]}${v}${mark}`;
+    });
+    return `<div class="plan-stats">輪次 <b>${roundCount}</b>／${maxR}<br/>${bits.join(
+      " · "
+    )}</div>`;
+  }
+
+  /** @type {ReturnType<typeof simulateAutoPlan>[]} */
+  let pendingAutoPlans = [];
+
+  function openAutoPlanModal(plans, maxR) {
+    pendingAutoPlans = plans;
+    const list = $("#autoPlanList");
+    if (!list) return;
+    const shape = isPureSailProfile() ? "六邊形（純帆）" : "七邊形";
+    list.innerHTML = plans
+      .map((plan, idx) => {
+        const s = plan.strategy;
+        return `<button type="button" class="auto-plan-card" data-plan-idx="${idx}">
+          <h4>${escapeAttr(s.name)}</h4>
+          <p class="plan-desc">${escapeAttr(s.desc)}</p>
+          ${buildRadarSvg(plan.totals)}
+          ${formatPlanStats(plan.totals, plan.roundCount, maxR)}
+          <span class="plan-pick btn-primary" style="display:block;padding:6px 8px;border-radius:8px;font-size:13px">選擇此方案</span>
+        </button>`;
+      })
+      .join("");
+
+    const intro = document.querySelector(".auto-plan-intro");
+    if (intro) {
+      intro.textContent = `雷達為${shape}（相對各屬性上限；紅字軸＝已達上限）。僅已達／超過上限的屬性不能再強，其餘與剩餘次數會繼續配。點選方案回填主表。`;
+    }
+
+    openModal("autoPlanModal");
+  }
+
+  function applyAutoPlan(plan) {
+    if (!plan || !plan.rounds?.length) {
+      toast("方案無效");
+      return;
+    }
+    rounds = plan.rounds.map((r) => ({
+      parts: r.parts.slice(),
+      values: { ...r.values },
+      locks: { ...r.locks },
+      note: r.note || "",
+    }));
+    closeModal("autoPlanModal");
+    pendingAutoPlans = [];
+    renderAll();
+    toast(`已套用「${plan.strategy.name}」（${plan.roundCount} 輪）`);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /**
+   * 自動配：產生多組方案 → 彈窗選雷達圖 → 回填主表
    */
   function runAutoAllocate() {
     const maxR = Number(maxEnhanceCount);
@@ -262,92 +493,35 @@
 
     const hasAnyTarget = ATTRS.some((a) => isAutoAllocTarget(a));
     if (!hasAnyTarget) {
-      toast("請至少設定一組「上限」+「優先」（優先留白表示不列入自動配）");
+      toast("請至少設定一組「上限」+「優先」（優先留白表示不列入自動配參考）");
       return;
     }
 
-    const hasData = rounds.some(
-      (r) => r.parts.some((p) => p !== "" && p != null) || r.note
-    );
-    if (hasData && !confirm("自動配會重算並取代目前所有輪次，是否繼續？")) {
-      return;
-    }
+    toast("正在計算多組方案…");
 
-    let totals = Object.fromEntries(ATTRS.map((a) => [a, 0]));
-    const newRounds = [];
-
-    for (let r = 0; r < maxR; r++) {
-      const roundsLeft = maxR - r;
-      const priOpen = planningAttrs(totals, "priority");
-      const mode = priOpen.length ? "priority" : "residual";
-      const targets = planningAttrs(totals, mode);
-      // 所有可強化屬性都封了才停（否則用光次數）
-      if (!targets.length) break;
-
-      const chosen = pickBestFourParts(totals, roundsLeft, mode);
-      if (!chosen || chosen.length !== SLOTS) break;
-
-      const round = emptyRound();
-      round.parts = chosen.slice();
-      const cap = roundPartCap(round);
-
-      const delta = Object.fromEntries(ATTRS.map((a) => [a, 0]));
-      for (const a of ATTRS) {
-        if (!canEnhanceAttr(totals[a] || 0, a)) {
-          delta[a] = 0;
-        } else {
-          delta[a] = cap[a] || 0;
-        }
-        totals[a] = (totals[a] || 0) + delta[a];
+    // 讓 toast 先畫出來
+    setTimeout(() => {
+      const plans = [];
+      const seen = new Set();
+      for (const strategy of AUTO_STRATEGIES) {
+        const plan = simulateAutoPlan(strategy, maxR);
+        if (!plan.rounds.length) continue;
+        if (plan.rounds.some((r) => !isPartsComplete(r))) continue;
+        const sig = plan.rounds
+          .map((r) => r.parts.join("-") + ":" + ATTRS.map((a) => r.values[a]).join(","))
+          .join("|");
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        plans.push(plan);
       }
 
-      const useful = targets.some((a) => (delta[a] || 0) > 0);
-      if (!useful) break;
-
-      if (cumulativeMode) {
-        round.values = { ...totals };
-      } else {
-        round.values = { ...delta };
+      if (!plans.length) {
+        toast("無法自動配置：請檢查上限、優先與零件資料");
+        return;
       }
 
-      const burst = targets.some((a) => {
-        const lim = getAttrLimit(a);
-        if (lim == null) return false;
-        const prev = (totals[a] || 0) - (delta[a] || 0);
-        return (
-          (delta[a] || 0) > 0 && prev < lim && (totals[a] || 0) >= lim
-        );
-      });
-      const phase =
-        mode === "priority"
-          ? burst
-            ? "優先·超限決勝"
-            : "優先·堆疊"
-          : burst
-            ? "剩餘·決勝"
-            : "剩餘·用光次數";
-      round.note = `自動配 #${r + 1} · ${phase}`;
-      newRounds.push(round);
-    }
-
-    if (!newRounds.length) {
-      toast("無法自動配置：請檢查上限、優先與零件資料");
-      return;
-    }
-    if (newRounds.some((r) => !isPartsComplete(r))) {
-      toast("自動配異常：存在未滿 4 零件的輪次");
-      return;
-    }
-
-    rounds = newRounds;
-    renderAll();
-    const usedAll = newRounds.length >= maxR;
-    toast(
-      usedAll
-        ? `自動配完成：已用光 ${maxR} 次強化（每輪 4 零件）`
-        : `自動配完成：${newRounds.length}/${maxR} 輪（其餘屬性也已無法再強化）`
-    );
-    window.scrollTo({ top: 0, behavior: "smooth" });
+      openAutoPlanModal(plans, maxR);
+    }, 30);
   }
 
   function syncEnhanceCountInput() {
@@ -730,6 +904,20 @@
     });
 
     $("#autoAllocBtn")?.addEventListener("click", runAutoAllocate);
+
+    $("#autoPlanClose")?.addEventListener("click", () =>
+      closeModal("autoPlanModal")
+    );
+    $("#autoPlanCancel")?.addEventListener("click", () =>
+      closeModal("autoPlanModal")
+    );
+    $("#autoPlanList")?.addEventListener("click", (e) => {
+      const card = e.target.closest("[data-plan-idx]");
+      if (!card) return;
+      const idx = Number(card.dataset.planIdx);
+      const plan = pendingAutoPlans[idx];
+      if (plan) applyAutoPlan(plan);
+    });
 
     $("#maxEnhanceCountInput")?.addEventListener("input", (e) => {
       maxEnhanceCount = e.target.value;

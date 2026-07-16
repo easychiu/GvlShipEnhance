@@ -90,7 +90,7 @@
               />
             </label>
             <span class="hint-inline"
-              >每輪 4 零件。自動配會盡量用光「強化次數」：先做有優先的，做完再用剩餘次數衝其他未封上限。</span
+              >每輪 4 零件。自動配會彈出多方案（六／七邊形雷達）；僅已達上限的屬性不能再強，其餘繼續配完次數。</span
             >
           </div>
           <div id="summary" class="summary-list"></div>
@@ -193,7 +193,7 @@
           </p>
           <p>
             <strong>13. 強化次數上限 + 自動配：</strong>
-            設定可強化總輪數後按「自動配」：每輪固定 4 零件，並盡量用光次數。先處理有填「優先」的屬性（堆疊→超限決勝）；優先都封頂後，剩餘次數改衝其他仍有上限、未封的屬性。增量＝零件加總。
+            設定次數與優先後按「自動配」，會彈出多組方案（附六／七邊形雷達圖）。只有已達上限的屬性不能再強，不會因此整輪停掉。選定方案後才回填主表。每輪 4 零件；增量＝零件加總。
           </p>
           <p>
             <strong>14. 套用船隻上限：</strong>
@@ -202,6 +202,26 @@
         </div>
         <div class="modal-actions">
           <button type="button" class="btn-blue" id="helpOk">我知道了</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 自動配方案選擇 -->
+    <div class="modal" id="autoPlanModal">
+      <div class="modal-card modal-card-wide">
+        <div class="modal-head">
+          <h3>🎯 自動配方案</h3>
+          <button type="button" class="icon-btn" id="autoPlanClose" aria-label="關閉">
+            ×
+          </button>
+        </div>
+        <p class="auto-plan-intro">
+          僅「已達／超過上限」的屬性不能再強，其他屬性與剩餘次數會繼續配。
+          純帆船雷達為六邊形（不含槳力）；一般為七邊形。點選方案即可回填主表。
+        </p>
+        <div id="autoPlanList" class="auto-plan-list"></div>
+        <div class="modal-actions">
+          <button type="button" id="autoPlanCancel">取消</button>
         </div>
       </div>
     </div>

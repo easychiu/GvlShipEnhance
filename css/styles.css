@@ -532,6 +532,86 @@ button:active {
   font-weight: 700;
 }
 
+/* ---- auto plan modal ---- */
+.modal-card-wide {
+  max-width: min(960px, 96vw);
+  width: 100%;
+}
+
+.auto-plan-intro {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.auto-plan-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  max-height: min(70vh, 560px);
+  overflow: auto;
+  padding: 2px;
+}
+
+.auto-plan-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f8fbf9;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.12s;
+}
+
+.auto-plan-card:hover,
+.auto-plan-card:focus-visible {
+  border-color: var(--primary);
+  box-shadow: 0 6px 18px rgba(43, 108, 176, 0.16);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.auto-plan-card h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.auto-plan-card .plan-desc {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+  min-height: 2.7em;
+}
+
+.auto-plan-card .plan-stats {
+  width: 100%;
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.auto-plan-card .plan-stats b {
+  color: var(--primary);
+}
+
+.auto-plan-card svg.radar {
+  display: block;
+  width: 168px;
+  height: 168px;
+}
+
+.auto-plan-card .plan-pick {
+  margin-top: 2px;
+  width: 100%;
+}
+
 /* ---- float panel ---- */
 #float-summary {
   position: fixed;
