@@ -125,7 +125,11 @@
     return 1 / p;
   }
 
-  /** 評估零件對「有上限 + 有優先 + 尚可強化」屬性的貢獻分數 */
+  /**
+   * 評估零件對優先目標的貢獻。
+   * 堆疊期（&lt; 上限-1）：偏向能貼近上限前一檔的零件；
+   * 決勝期（已在上限-1）：偏向最大加成以便一口氣超限。
+   */
   function scorePartForTotals(part, totals) {
     let score = 0;
     for (const a of ATTRS) {
@@ -133,19 +137,48 @@
       const lim = getAttrLimit(a);
       const bonus = part.bonus[a] || 0;
       if (bonus <= 0) continue;
-      if (!canEnhanceAttr(totals[a] || 0, a)) continue;
+      const p = totals[a] || 0;
+      if (!canEnhanceAttr(p, a)) continue;
       const w = priorityWeight(a);
       if (w <= 0) continue;
-      const remain = Math.max(0, lim - (totals[a] || 0));
-      score += bonus * w * 100;
-      score += Math.min(bonus, Math.max(remain, 1)) * w * 15;
+      const underMax = lim - 1;
+      if (p < underMax) {
+        const need = underMax - p;
+        score += Math.min(bonus, need) * w * 120;
+        score += bonus * w * 8;
+      } else {
+        // 已貼上限前一檔 → 決勝一口氣，越大越好（如 +52）
+        score += bonus * w * 260;
+      }
     }
     return score;
   }
 
   /**
+   * 自動配本輪增量（僅優先目標）。
+   * - 非優先：0（不浪費在沒優先的屬性）
+   * - 加滿後仍 &lt; 上限：全加
+   * - 會觸及/超過上限：若還有後續輪次則先堆到 上限-1；否則（或已在上限-1）一口氣加滿可超限
+   */
+  function autoAllocDelta(attr, prevTotal, partCap, roundsLeft) {
+    if (!isAutoAllocTarget(attr)) return 0;
+    if (!canEnhanceAttr(prevTotal, attr)) return 0;
+    const C = partCap || 0;
+    if (C <= 0) return 0;
+    const L = getAttrLimit(attr);
+    const P = prevTotal || 0;
+    if (P + C < L) return C;
+    const roomUnder = L - 1 - P;
+    if (roomUnder > 0 && roundsLeft > 1) {
+      return Math.min(C, roomUnder);
+    }
+    // 最後一輪、或已在上限-1：一口氣全上（可 84+52→136）
+    return C;
+  }
+
+  /**
    * 依次數上限、屬性上限、優先順序自動配置各輪零件與數值。
-   * 規則：同輪零件不重複；未達上限可再強且可超限；達上限後不可再強。
+   * 僅服務有填「優先」的屬性；採「先貼上限前一檔 → 最後一口氣超限」。
    */
   function runAutoAllocate() {
     const maxR = Number(maxEnhanceCount);
@@ -177,7 +210,8 @@
     const newRounds = [];
 
     for (let r = 0; r < maxR; r++) {
-      // 目標屬性（有上限 + 有優先）皆已達標/封頂則提早結束
+      const roundsLeft = maxR - r;
+      // 僅優先目標；皆已封頂（含超限後）則提早結束，不浪費次數
       const activeTargets = ATTRS.filter(
         (a) => isAutoAllocTarget(a) && canEnhanceAttr(totals[a] || 0, a)
       );
@@ -210,28 +244,37 @@
       const cap = roundPartCap(round);
       const delta = Object.fromEntries(ATTRS.map((a) => [a, 0]));
       for (const a of ATTRS) {
-        if (canEnhanceAttr(totals[a] || 0, a)) {
-          delta[a] = cap[a] || 0;
-          totals[a] = (totals[a] || 0) + delta[a];
-        }
+        const d = autoAllocDelta(a, totals[a] || 0, cap[a] || 0, roundsLeft);
+        delta[a] = d;
+        totals[a] = (totals[a] || 0) + d;
       }
+      // 若本輪對所有優先目標都是 0 增量，視為無法推進
+      const useful = activeTargets.some((a) => (delta[a] || 0) > 0);
+      if (!useful) break;
+
       if (cumulativeMode) {
         round.values = { ...totals };
       } else {
         round.values = { ...delta };
       }
-      round.note = `自動配 #${r + 1}`;
+      const burst = activeTargets.filter((a) => {
+        const lim = getAttrLimit(a);
+        return lim != null && (totals[a] || 0) >= lim && (delta[a] || 0) > 0;
+      });
+      round.note = burst.length
+        ? `自動配 #${r + 1} · 超限決勝`
+        : `自動配 #${r + 1} · 堆疊`;
       newRounds.push(round);
     }
 
     if (!newRounds.length) {
-      toast("無法自動配置：請檢查上限與零件資料");
+      toast("無法自動配置：請檢查上限、優先與零件資料");
       return;
     }
 
     rounds = newRounds;
     renderAll();
-    toast(`自動配完成：共 ${rounds.length} 輪`);
+    toast(`自動配完成：共 ${rounds.length} 輪（僅優先屬性）`);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
