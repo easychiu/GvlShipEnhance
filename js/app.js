@@ -137,14 +137,47 @@
     return (round?.parts || []).filter((p) => p !== "" && p != null).length;
   }
 
-  /** 純帆（槳力上限 0）用六邊形；否則七邊形 */
+  /** 純帆（槳力上限 0）：無槳可選、雷達六邊形 */
   function isPureSailProfile() {
     return getAttrLimit("槳力") === 0;
   }
 
-  function chartAttrs() {
+  /** 介面／自動配可見屬性（純帆不含槳力） */
+  function uiAttrs() {
     if (isPureSailProfile()) return ATTRS.filter((a) => a !== "槳力");
     return ATTRS.slice();
+  }
+
+  function chartAttrs() {
+    return uiAttrs();
+  }
+
+  /** 有槳力加成的零件（純帆不可選） */
+  function isPaddlePart(partOrId) {
+    const p =
+      typeof partOrId === "object" && partOrId
+        ? partOrId
+        : PARTS[String(partOrId)];
+    return !!(p && (p.bonus["槳力"] || 0) > 0);
+  }
+
+  /** 純帆時清掉已選槳零件與槳力優先 */
+  function stripPaddleForPureSail() {
+    if (!isPureSailProfile()) return false;
+    let changed = false;
+    attrPriority["槳力"] = "";
+    for (const round of rounds) {
+      for (let i = 0; i < round.parts.length; i++) {
+        if (round.parts[i] && isPaddlePart(round.parts[i])) {
+          round.parts[i] = "";
+          changed = true;
+        }
+      }
+      if (round.values) round.values["槳力"] = round.values["槳力"] || 0;
+      if (round.locks) round.locks["槳力"] = false;
+    }
+    if (filterAttr === "槳力") filterAttr = null;
+    return changed;
   }
 
   /** 仍可強化的屬性（只有達/超上限的不能強，其他照常） */
@@ -362,8 +395,11 @@
   }
 
   function pickBestFourParts(totals, roundsLeft, strategy) {
-    const all = Object.values(PARTS);
+    const all = Object.values(PARTS).filter(
+      (p) => !(isPureSailProfile() && isPaddlePart(p))
+    );
     const n = all.length;
+    if (n < SLOTS) return null;
     let best = null;
     let bestScore = -Infinity;
     let fallback = null;
@@ -674,11 +710,12 @@
           : "",
       ])
     );
-    // 僅帶入上限，不改寫既有輪次數值
+    // 純帆：清槳零件／槳優先，介面不出現槳可選
+    if (isPureSailProfile()) stripPaddleForPureSail();
     renderAll();
     syncShipLimitSelector();
     if (!silent) {
-      const pure = ship.pureSail || ship.limits.槳力 === 0 ? "（純帆·無槳）" : "";
+      const pure = ship.pureSail || ship.limits.槳力 === 0 ? "（純帆·無槳可選）" : "";
       toast(`已套用 Lv.${ship.lv} ${ship.name} 強化上限${pure}`);
     }
     return true;
@@ -778,7 +815,10 @@
 
   function partOptionsHtml(selected, filter, takenIds) {
     const taken = takenIds || new Set();
-    const list = Object.values(PARTS);
+    const pure = isPureSailProfile();
+    let list = Object.values(PARTS);
+    // 純帆：不可選有槳力加成的零件
+    if (pure) list = list.filter((p) => !isPaddlePart(p));
     const filtered = filter
       ? list.filter((p) => (p.bonus[filter] || 0) > 0)
       : list;
@@ -792,12 +832,14 @@
       const sel = String(selected) === id ? " selected" : "";
       opts.push(`<option value="${p.id}"${sel}>${partOptionLabel(p)}</option>`);
     }
-    // 篩選時仍保留目前已選但不符條件的零件
+    // 篩選時仍保留目前已選但不符條件的零件（純帆不保留槳零件）
     if (selected && !listed.has(String(selected)) && PARTS[String(selected)]) {
-      const p = PARTS[String(selected)];
-      opts.push(
-        `<option value="${p.id}" selected>${partOptionLabel(p)}（目前選擇）</option>`
-      );
+      if (!(pure && isPaddlePart(selected))) {
+        const p = PARTS[String(selected)];
+        opts.push(
+          `<option value="${p.id}" selected>${partOptionLabel(p)}（目前選擇）</option>`
+        );
+      }
     }
     return opts.join("");
   }
@@ -831,7 +873,7 @@
           })
           .join("");
 
-        const attrItems = ATTRS.map((a) => {
+        const attrItems = uiAttrs().map((a) => {
           const sealed = !canEnhanceAttr(prev[a] || 0, a);
           const gain = sealed ? 0 : cap[a] || 0;
           const hidden =
@@ -888,7 +930,7 @@
             ${incompleteHint}
             <div class="attr-row">${attrItems}
               <div class="row-tools">
-                <small style="color:var(--muted)" title="可強化時增量應等於零件加總；已封屬性為 0">本輪增量：${ATTRS.filter((a) => delta[a] || (cap[a] && !canEnhanceAttr(prev[a] || 0, a))).map((a) => {
+                <small style="color:var(--muted)" title="可強化時增量應等於零件加總；已封屬性為 0">本輪增量：${uiAttrs().filter((a) => delta[a] || (cap[a] && !canEnhanceAttr(prev[a] || 0, a))).map((a) => {
                   const d = delta[a] || 0;
                   const c = cap[a] || 0;
                   const sealed = !canEnhanceAttr(prev[a] || 0, a);
@@ -925,14 +967,18 @@
       })
     );
 
-    $("#summary").innerHTML = ATTRS.map((a) => {
-      const val = total[a] || 0;
-      const lim = Number(maxLimit[a]);
-      const hasLim = maxLimit[a] !== "" && Number.isFinite(lim) && lim >= 0;
-      const pct = hasLim && lim > 0 ? Math.min(100, (val / lim) * 100) : Math.min(100, (val / maxBase) * 100);
-      const reached = hasLim && val >= lim && lim > 0;
-      const pri = attrPriority[a] ?? "";
-      return `
+    $("#summary").innerHTML = uiAttrs()
+      .map((a) => {
+        const val = total[a] || 0;
+        const lim = Number(maxLimit[a]);
+        const hasLim = maxLimit[a] !== "" && Number.isFinite(lim) && lim >= 0;
+        const pct =
+          hasLim && lim > 0
+            ? Math.min(100, (val / lim) * 100)
+            : Math.min(100, (val / maxBase) * 100);
+        const reached = hasLim && val >= lim && lim > 0;
+        const pri = attrPriority[a] ?? "";
+        return `
         <div class="summary-item">
           <div class="summary-label${filterAttr === a ? " active" : ""}" data-filter="${a}">${a}</div>
           <div class="range-bar${reached ? " reached" : ""}">
@@ -948,10 +994,12 @@
             <input class="priority-input" type="number" data-priority="${a}" value="${pri}" min="1" max="99" placeholder="—" title="數字愈小愈優先；留白則不列入自動配" />
           </div>
         </div>`;
-    }).join("");
+      })
+      .join("");
 
     syncEnhanceCountInput();
     syncShipLimitSelector();
+    renderFilters();
     renderFloat(total);
   }
 
@@ -962,22 +1010,25 @@
       return;
     }
     panel.classList.add("visible");
-    $("#float-summary-content").innerHTML = ATTRS.map((a) => {
-      const val = total[a] || 0;
-      const lim = Number(maxLimit[a]);
-      const hasLim = maxLimit[a] !== "" && lim > 0;
-      const pct = hasLim ? Math.min(100, (val / lim) * 100) : 0;
-      return `
+    $("#float-summary-content").innerHTML = uiAttrs()
+      .map((a) => {
+        const val = total[a] || 0;
+        const lim = Number(maxLimit[a]);
+        const hasLim = maxLimit[a] !== "" && lim > 0;
+        const pct = hasLim ? Math.min(100, (val / lim) * 100) : 0;
+        return `
         <div class="float-item">
           <span class="float-name${filterAttr === a ? " active" : ""}" data-filter="${a}">${SHORT[a]}</span>
           <span style="text-align:right;font-weight:600">${val}</span>
           <div class="float-bar"><span style="width:${pct}%;background:${COLORS[a]}"></span></div>
           <span style="color:var(--muted)">${hasLim ? lim : ""}</span>
         </div>`;
-    }).join("");
+      })
+      .join("");
   }
 
   function renderAll() {
+    if (isPureSailProfile()) stripPaddleForPureSail();
     renderRounds();
     renderSummary();
     updateToolbarLabels();
@@ -1080,12 +1131,11 @@
     $("#importBtn").addEventListener("click", () => $("#importFile").click());
     $("#importFile").addEventListener("change", importConfig);
 
-    $("#filterAll").addEventListener("click", (e) => {
-      setFilter(null, e.currentTarget);
-    });
-
-    $$(".filter-btn[data-attr]").forEach((btn) => {
-      btn.addEventListener("click", () => setFilter(btn.dataset.attr, btn));
+    $("#filterGroup")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".filter-btn");
+      if (!btn || !e.currentTarget.contains(btn)) return;
+      if (btn.id === "filterAll") setFilter(null, btn);
+      else if (btn.dataset.attr) setFilter(btn.dataset.attr, btn);
     });
 
     $("#helpGuideBtn").addEventListener("click", () => openModal("helpModal"));
@@ -1182,6 +1232,12 @@
       // 同一輪不可選重複零件
       if (next !== "" && takenPartIds(rounds[ri].parts, si).has(String(next))) {
         toast("同一輪強化不可重複選擇相同零件");
+        t.value = rounds[ri].parts[si] ? String(rounds[ri].parts[si]) : "";
+        return;
+      }
+      // 純帆不可選槳零件
+      if (next !== "" && isPureSailProfile() && isPaddlePart(next)) {
+        toast("純帆船不可選擇槳力零件");
         t.value = rounds[ri].parts[si] ? String(rounds[ri].parts[si]) : "";
         return;
       }
@@ -1557,22 +1613,27 @@
         .join("");
   }
 
-  function initFilters() {
+  function renderFilters() {
     const group = $("#filterGroup");
+    if (!group) return;
+    const attrs = uiAttrs();
+    const allActive = !filterAttr ? " active" : "";
     group.innerHTML =
-      `<button type="button" class="filter-btn active" id="filterAll">全選</button>` +
-      ATTRS.map(
-        (a) =>
-          `<button type="button" class="filter-btn" data-attr="${a}">${a}</button>`
-      ).join("");
+      `<button type="button" class="filter-btn${allActive}" id="filterAll">全選</button>` +
+      attrs
+        .map((a) => {
+          const act = filterAttr === a ? " active" : "";
+          return `<button type="button" class="filter-btn${act}" data-attr="${a}">${a}</button>`;
+        })
+        .join("");
   }
 
   function init() {
-    initFilters();
     initTypeSelector();
     initShipLimitSelector();
     rounds = [emptyRound()];
     bindStatic();
+    renderFilters();
     renderAll();
     renderPresetList();
 
