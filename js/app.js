@@ -152,17 +152,39 @@
     return ATTRS.filter((a) => canEnhanceAttr(totals[a] || 0, a));
   }
 
+  /** 是否為「只聽使用者優先」類策略（優先做完可不浪費次數在其它屬性） */
+  function isUserPriorityStrategy(strategy) {
+    return (
+      strategy.id === "user-strict" ||
+      strategy.id === "user-serial" ||
+      strategy.id === "user-park"
+    );
+  }
+
   /**
-   * 本輪選零件時的「主攻」屬性（已封的排除，不整輪停掉）
+   * 本輪選零件時的「主攻」屬性（已封的排除）
+   * user-strict / user-park：所有有填優先且未封
+   * user-serial：只打目前最優先（數字最小）那一檔
    */
   function strategyFocusAttrs(totals, strategy) {
     const open = enhanceableAttrs(totals);
     if (!open.length) return [];
 
-    const priOpen = open.filter((a) => isAutoAllocTarget(a));
+    const priOpen = open
+      .filter((a) => isAutoAllocTarget(a))
+      .sort((a, b) => getAutoPriority(a) - getAutoPriority(b));
     const limitedOpen = open.filter((a) => getAttrLimit(a) != null);
 
     switch (strategy.id) {
+      case "user-strict":
+      case "user-park":
+        return priOpen;
+      case "user-serial":
+        if (!priOpen.length) return [];
+        {
+          const top = getAutoPriority(priOpen[0]);
+          return priOpen.filter((a) => getAutoPriority(a) === top);
+        }
       case "burst":
       case "park":
       case "balanced":
@@ -186,23 +208,28 @@
     const basePri = pri != null ? 1 / pri : 0.15;
     const lim = getAttrLimit(attr);
     const p = totals[attr] || 0;
-    const remain =
-      lim != null ? Math.max(0, lim - p) : 50;
+    const remain = lim != null ? Math.max(0, lim - p) : 50;
 
     switch (strategy.id) {
+      case "user-strict":
+      case "user-serial":
+        // 嚴格跟使用者數字：1 遠大於 2、3；沒填優先幾乎忽略
+        return pri != null ? (1 / pri) * 8 : 0.02;
+      case "user-park":
+        return pri != null ? (1 / pri) * 6 : 0.03;
       case "park":
       case "burst":
         return isAutoAllocTarget(attr) ? basePri * 3 : basePri * 0.4;
       case "balanced":
         return isAutoAllocTarget(attr) ? 1 : 0.2;
       case "all-limit":
-        return (isAutoAllocTarget(attr) ? basePri * 2 : 0.5) * (1 + remain / 100);
+        return (
+          (isAutoAllocTarget(attr) ? basePri * 2 : 0.5) * (1 + remain / 100)
+        );
       case "tank": {
         const tankBoost =
           attr === "船耐" ? 2.2 : attr === "護甲" ? 1.8 : attr === "抗浪" ? 1.5 : 1;
-        return (
-          (isAutoAllocTarget(attr) ? basePri * 2.5 : 0.35) * tankBoost
-        );
+        return (isAutoAllocTarget(attr) ? basePri * 2.5 : 0.35) * tankBoost;
       }
       default:
         return basePri;
@@ -214,7 +241,9 @@
     const focus = strategyFocusAttrs(totals, strategy);
     if (!focus.length) return { valid: false, score: -1, cap };
 
-    const usePark = strategy.id !== "burst";
+    // 激進決勝、依序攻頂決勝段：不堆疊控管
+    const usePark =
+      strategy.id !== "burst" && strategy.id !== "user-strict";
     let score = 0;
     let valid = true;
 
@@ -241,10 +270,18 @@
         if (P + C >= L) score += (P + C - L) * w * 20;
       }
     }
-    // 輕微獎勵其它仍可強化屬性的順便加成
-    for (const a of enhanceableAttrs(totals)) {
-      if (focus.includes(a)) continue;
-      score += (cap[a] || 0) * strategyWeight(a, strategy, totals) * 8;
+
+    // 使用者優先類：懲罰非優先屬性的順便成長（趕路排槳不想亂堆船耐等）
+    if (isUserPriorityStrategy(strategy)) {
+      for (const a of enhanceableAttrs(totals)) {
+        if (focus.includes(a) || isAutoAllocTarget(a)) continue;
+        score -= (cap[a] || 0) * 12;
+      }
+    } else {
+      for (const a of enhanceableAttrs(totals)) {
+        if (focus.includes(a)) continue;
+        score += (cap[a] || 0) * strategyWeight(a, strategy, totals) * 8;
+      }
     }
     return { valid, score, cap };
   }
@@ -290,9 +327,24 @@
 
   const AUTO_STRATEGIES = [
     {
+      id: "user-park",
+      name: "★ 我的優先（穩健）",
+      desc: "只聽你填的優先（例：帆1／槳2／抗浪3）。先貼上限前一檔再超限；其它屬性能少就少",
+    },
+    {
+      id: "user-strict",
+      name: "★ 我的優先（激進）",
+      desc: "嚴格照優先數字衝高（1≫2≫3），盡早超限決勝；不重要的屬性盡量不帶",
+    },
+    {
+      id: "user-serial",
+      name: "★ 依序攻頂",
+      desc: "先做完優先 1（如雙帆），再做 2（槳），再做 3（抗浪），適合純趕路排槳",
+    },
+    {
       id: "park",
       name: "穩健堆疊",
-      desc: "優先屬性先貼上限前一檔再超限；其餘未封屬性繼續配完次數",
+      desc: "優先為主，做完後剩餘次數再補其它未封上限",
     },
     {
       id: "burst",
@@ -323,12 +375,16 @@
   function simulateAutoPlan(strategy, maxR) {
     let totals = Object.fromEntries(ATTRS.map((a) => [a, 0]));
     const planRounds = [];
+    const userOnly = isUserPriorityStrategy(strategy);
 
     for (let r = 0; r < maxR; r++) {
       const roundsLeft = maxR - r;
       const open = enhanceableAttrs(totals);
-      // 沒有任何屬性能再強才停
       if (!open.length) break;
+
+      // 使用者優先類：你的優先都封了就停，不拿次數去堆不重要的屬性
+      const focus = strategyFocusAttrs(totals, strategy);
+      if (userOnly && !focus.length) break;
 
       const chosen = pickBestFourParts(totals, roundsLeft, strategy);
       if (!chosen || chosen.length !== SLOTS) break;
@@ -339,7 +395,7 @@
       const delta = Object.fromEntries(ATTRS.map((a) => [a, 0]));
 
       for (const a of ATTRS) {
-        // 僅略過已達/超上限的屬性
+        // 僅略過已達/超上限的屬性；零件加成仍會寫入未封屬性（與零件一致）
         if (!canEnhanceAttr(totals[a] || 0, a)) {
           delta[a] = 0;
         } else {
@@ -348,7 +404,13 @@
         totals[a] = (totals[a] || 0) + delta[a];
       }
 
-      if (!ATTRS.some((a) => (delta[a] || 0) > 0)) break;
+      // 使用者優先：至少要有一項「主攻優先」有增量，否則無意義
+      if (userOnly) {
+        const focusGain = focus.some((a) => (delta[a] || 0) > 0);
+        if (!focusGain) break;
+      } else if (!ATTRS.some((a) => (delta[a] || 0) > 0)) {
+        break;
+      }
 
       if (cumulativeMode) {
         round.values = { ...totals };
@@ -437,10 +499,16 @@
     const list = $("#autoPlanList");
     if (!list) return;
     const shape = isPureSailProfile() ? "六邊形（純帆）" : "七邊形";
+    const priHint = ATTRS.filter((a) => isAutoAllocTarget(a))
+      .sort((a, b) => getAutoPriority(a) - getAutoPriority(b))
+      .map((a) => `${a}${getAutoPriority(a)}`)
+      .join("／");
+
     list.innerHTML = plans
       .map((plan, idx) => {
         const s = plan.strategy;
-        return `<button type="button" class="auto-plan-card" data-plan-idx="${idx}">
+        const starred = s.name.startsWith("★") ? " plan-user" : "";
+        return `<button type="button" class="auto-plan-card${starred}" data-plan-idx="${idx}">
           <h4>${escapeAttr(s.name)}</h4>
           <p class="plan-desc">${escapeAttr(s.desc)}</p>
           ${buildRadarSvg(plan.totals)}
@@ -452,7 +520,9 @@
 
     const intro = document.querySelector(".auto-plan-intro");
     if (intro) {
-      intro.textContent = `雷達為${shape}（相對各屬性上限；紅字軸＝已達上限）。僅已達／超過上限的屬性不能再強，其餘與剩餘次數會繼續配。點選方案回填主表。`;
+      intro.textContent = `雷達為${shape}（相對上限；紅字＝已達上限）。你的優先：${
+        priHint || "（未設定）"
+      }。★開頭方案只衝你的優先（適合趕路排槳）。點選後回填主表。`;
     }
 
     openModal("autoPlanModal");

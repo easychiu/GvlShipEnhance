@@ -612,6 +612,15 @@ button:active {
   width: 100%;
 }
 
+.auto-plan-card.plan-user {
+  border-color: #74c0fc;
+  background: linear-gradient(180deg, #f0f7ff 0%, #f8fbf9 55%);
+}
+
+.auto-plan-card.plan-user h4 {
+  color: #1c7ed6;
+}
+
 /* ---- float panel ---- */
 #float-summary {
   position: fixed;
