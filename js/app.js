@@ -228,21 +228,74 @@
     }
   }
 
+  /** 本輪自動配共用的 maxBurst 快取（一次窮舉填多屬性） */
+  let maxBurstCache = null;
+
+  function clearMaxBurstCache() {
+    maxBurstCache = null;
+  }
+
+  /**
+   * 一次窮舉填入各屬性最大決勝 4 件（供單軸最高／多方案共用）
+   */
+  function ensureMaxBurstCache(attrs) {
+    const need = attrs && attrs.length ? attrs : ATTRS.slice();
+    if (!maxBurstCache) maxBurstCache = {};
+    const missing = need.filter((a) => !maxBurstCache[a]);
+    if (!missing.length) return maxBurstCache;
+    for (const a of missing) {
+      maxBurstCache[a] = { parts: null, burst: -1 };
+    }
+    forEachFourCombo((ids, cap) => {
+      for (const a of missing) {
+        const c = cap[a] || 0;
+        if (c > maxBurstCache[a].burst) {
+          maxBurstCache[a] = { parts: ids.slice(), burst: c };
+        }
+      }
+    });
+    for (const a of missing) {
+      maxBurstCache[a].burst = Math.max(0, maxBurstCache[a].burst);
+    }
+    return maxBurstCache;
+  }
+
   /**
    * 單屬性「決勝一擊」最大零件加成（4 件不重複全搜尋）
    * 達上限後不能再強，超限只靠這一輪 → 此值即單軸最大可能超限加成。
    */
   function computeMaxBurst(attr) {
-    let bestIds = null;
-    let bestC = -1;
-    forEachFourCombo((ids, cap) => {
-      const c = cap[attr] || 0;
-      if (c > bestC) {
-        bestC = c;
-        bestIds = ids.slice();
-      }
+    ensureMaxBurstCache([attr]);
+    return maxBurstCache[attr] || { parts: null, burst: 0 };
+  }
+
+  /**
+   * 單軸理論最高：先貼上限-1，再 + maxBurst
+   * final = (L-1) + burst，over = final - L = burst - 1（L≥1）
+   */
+  function theoreticalPeak(attr) {
+    const L = getAttrLimit(attr);
+    if (L == null) return null;
+    if (L <= 0) {
+      return { attr, limit: L, pre: 0, burst: 0, final: 0, over: 0 };
+    }
+    const { burst, parts } = computeMaxBurst(attr);
+    const pre = L - 1;
+    const final = pre + burst;
+    const over = Math.max(0, final - L);
+    return { attr, limit: L, pre, burst, final, over, parts };
+  }
+
+  function formatPeakSummary(targets) {
+    if (!targets.length) return "";
+    ensureMaxBurstCache(targets);
+    const lines = targets.map((a) => {
+      const p = theoreticalPeak(a);
+      if (!p) return `${a}（無上限）`;
+      if (p.limit <= 0) return `${a} 上限0（不可強）`;
+      return `${a} 上限${p.limit}→理論最高<strong>${p.final}</strong>（決勝+${p.burst}，超+${p.over}）`;
     });
-    return { parts: bestIds, burst: Math.max(0, bestC) };
+    return lines.join("<br/>");
   }
 
   /** 堆疊：4 件加滿後該屬性增量 ≤ roomUnder，並盡量大 */
@@ -381,23 +434,51 @@
       return w;
     };
 
-    // ★ 單軸最大決勝（可證明決勝輪 = 全搜尋最大 4 件加成）
+    // 先算各優先理論最高，供方案說明與「衝高單軸」
+    ensureMaxBurstCache(targets);
+    const peaks = Object.fromEntries(
+      targets.map((a) => [a, theoreticalPeak(a)])
+    );
+
+    // ★ 每個優先屬性各一組：專攻到該軸理論最高（先做該軸再做其餘）
+    for (const a of targets) {
+      const peak = peaks[a];
+      const rest = targets.filter((x) => x !== a);
+      const order = [a, ...rest];
+      const peakTxt =
+        peak && peak.limit > 0
+          ? `理論最高 ${peak.final}（超+${peak.over}）`
+          : "無有效上限";
+      push({
+        id: `proven-peak-${a}`,
+        name: `★ 最高${a}`,
+        desc: `專攻${a}到單軸理論最高：${peakTxt}；其餘優先其後再做`,
+        mode: "proven",
+        order,
+        peakAttr: a,
+      });
+    }
+
+    // ★ 全優先依序都衝最高（可證明各軸決勝 = 全搜尋最大 4 件）
     push({
       id: "proven-max-burst",
-      name: "★ 單軸最大決勝",
-      desc: `逐軸堆到上限前一檔，決勝用全搜尋最大 4 件（${priLabel}）；單軸超限加成保證最大`,
+      name: "★ 全優先最高（依序）",
+      desc: `依優先序逐軸：堆到上限前一檔→決勝最大 4 件（${priLabel}）`,
       mode: "proven",
       order: targets.slice(),
     });
 
     if (targets.length >= 2 && targets.length <= 3) {
       for (const order of permutations(targets)) {
-        // 與預設順序相同的略過（上面已有）
         if (order.join("-") === targets.join("-")) continue;
+        // 與「最高X」開頭順序相同的略過
+        if (order[0] && order.slice(1).join("-") === targets.filter((x) => x !== order[0]).join("-")) {
+          continue;
+        }
         push({
           id: `proven-max-${order.join("-")}`,
-          name: `★ 最大決勝 ${order.map((a) => SHORT[a]).join("→")}`,
-          desc: `單軸最大決勝，順序：${order.join(" → ")}`,
+          name: `★ 最高序 ${order.map((a) => SHORT[a]).join("→")}`,
+          desc: `各軸理論最高決勝，順序：${order.join(" → ")}`,
           mode: "proven",
           order: order.slice(),
         });
@@ -784,9 +865,10 @@
       const mark = lim != null && v >= lim && lim > 0 ? "✓" : "";
       return `${SHORT[a]}${v}${mark}`;
     });
-    // 優先屬性超限合計（越高越好）
+    // 優先屬性超限合計 + 是否達理論最高
     let overSum = 0;
     const overBits = [];
+    const peakBits = [];
     for (const a of userPriorityAttrs()) {
       const lim = getAttrLimit(a);
       const v = totals[a] || 0;
@@ -795,16 +877,27 @@
         overSum += o;
         overBits.push(`${SHORT[a]}+${o}`);
       }
+      const peak = theoreticalPeak(a);
+      if (peak && peak.limit > 0 && v >= peak.final) {
+        peakBits.push(`${SHORT[a]}滿`);
+      } else if (peak && peak.limit > 0 && v > 0) {
+        peakBits.push(`${SHORT[a]}${v}/${peak.final}`);
+      }
     }
     const overLine =
       overSum > 0
-        ? `<br/><span style="color:#c92a2a">超限合計 <b>${overSum}</b>${
+        ? `<br/><span style="color:var(--danger)">超限合計 <b>${overSum}</b>${
             overBits.length ? `（${overBits.join(" ")}）` : ""
           }</span>`
         : "";
+    const peakLine = peakBits.length
+      ? `<br/><span style="color:var(--primary)">相對理論最高：${peakBits.join(
+          " · "
+        )}</span>`
+      : "";
     return `<div class="plan-stats">輪次 <b>${roundCount}</b>／${maxR}<br/>${bits.join(
       " · "
-    )}${overLine}</div>`;
+    )}${overLine}${peakLine}</div>`;
   }
 
   /** @type {ReturnType<typeof simulateAutoPlan>[]} */
@@ -815,28 +908,34 @@
     const list = $("#autoPlanList");
     if (!list) return;
     const shape = isPureSailProfile() ? "六邊形（純帆）" : "七邊形";
-    const priHint = userPriorityAttrs()
+    const targets = userPriorityAttrs();
+    const priHint = targets
       .map((a) => `${a}${getAutoPriority(a)}`)
       .join("／");
+    const peakHtml = formatPeakSummary(targets);
 
-    list.innerHTML = plans
-      .map((plan, idx) => {
-        const s = plan.strategy;
-        return `<button type="button" class="auto-plan-card plan-user" data-plan-idx="${idx}">
+    list.innerHTML =
+      (peakHtml
+        ? `<div class="peak-summary"><div class="peak-title">各優先·單軸理論最高（先貼上限前一檔＋決勝最大4件）</div><div class="peak-body">${peakHtml}</div><div class="peak-hint">下方「★ 最高Ｘ」即專攻該軸到此天花板；次數不夠時可能到不了。</div></div>`
+        : "") +
+      plans
+        .map((plan, idx) => {
+          const s = plan.strategy;
+          return `<button type="button" class="auto-plan-card plan-user" data-plan-idx="${idx}">
           <h4>${escapeAttr(s.name)}</h4>
           <p class="plan-desc">${escapeAttr(s.desc)}</p>
           ${buildRadarSvg(plan.totals)}
           ${formatPlanStats(plan.totals, plan.roundCount, maxR)}
           <span class="plan-pick btn-primary" style="display:block;padding:6px 8px;border-radius:8px;font-size:13px">選擇此方案</span>
         </button>`;
-      })
-      .join("");
+        })
+        .join("");
 
     const intro = document.querySelector(".auto-plan-intro");
     if (intro) {
-      intro.textContent = `全部依你的優先產生組合（目前：${
+      intro.innerHTML = `依你的優先產生組合（目前：<b>${
         priHint || "未設定"
-      }）。同填 1＝都想盡量超限。雷達${shape}；紅字軸＝已達上限。點選後回填主表。`;
+      }</b>）。同填 1＝都想盡量超限。雷達${shape}。點選方案回填主表。`;
     }
 
     openModal("autoPlanModal");
@@ -884,6 +983,7 @@
     toast("正在依你的優先計算組合方案…");
 
     setTimeout(() => {
+      clearMaxBurstCache();
       const strategies = buildUserPriorityStrategies();
       const plans = [];
       const seen = new Set();

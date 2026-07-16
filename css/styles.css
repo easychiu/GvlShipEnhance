@@ -667,6 +667,33 @@ button:active {
   line-height: 1.45;
 }
 
+.peak-summary {
+  grid-column: 1 / -1;
+  margin-bottom: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--plan-user-border);
+  background: var(--primary-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.peak-summary .peak-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: var(--plan-user-title);
+}
+
+.peak-summary .peak-body {
+  margin-bottom: 4px;
+}
+
+.peak-summary .peak-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .auto-plan-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
