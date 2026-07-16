@@ -226,7 +226,7 @@
           </p>
           <p>
             <strong>13. 強化次數上限 + 自動配：</strong>
-            設定次數與優先後按「自動配」。會列出各優先的「單軸理論最高」，並提供「★ 最高Ｘ／全優先最高」等方案（決勝輪全搜尋最大 4 件）。次數夠時可達各軸天花板。
+            設定次數與優先後按「自動配」：可選<strong>從頭配</strong>或<strong>接著現有配置</strong>（已強化 N 次則只規劃剩餘次數，保留既有輪次與數值）。方案含各優先理論最高與雷達圖。
           </p>
           <p>
             <strong>14. 套用船隻上限：</strong>
@@ -239,6 +239,32 @@
         </div>
         <div class="modal-actions">
           <button type="button" class="btn-blue" id="helpOk">我知道了</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 自動配：從頭 / 接著 -->
+    <div class="modal" id="autoModeModal">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h3>🎯 自動配方式</h3>
+          <button type="button" class="icon-btn" id="autoModeClose" aria-label="關閉">
+            ×
+          </button>
+        </div>
+        <p class="auto-mode-hint" id="autoModeHint">
+          選擇從頭規劃，或依目前已強化的輪次接著配（仍參考你的優先）。
+        </p>
+        <div class="auto-mode-actions">
+          <button type="button" class="btn-primary" id="autoModeScratch">
+            從頭配
+          </button>
+          <button type="button" class="btn-orange" id="autoModeContinue">
+            接著現有配置
+          </button>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="autoModeCancel">取消</button>
         </div>
       </div>
     </div>

@@ -288,14 +288,22 @@
     return { attr, limit: L, pre, burst, final, over, parts };
   }
 
-  function formatPeakSummary(targets) {
+  function formatPeakSummary(targets, startTotals) {
     if (!targets.length) return "";
     ensureMaxBurstCache(targets);
+    const base = startTotals || Object.fromEntries(ATTRS.map((a) => [a, 0]));
     const lines = targets.map((a) => {
       const p = theoreticalPeak(a);
-      if (!p) return `${a}（無上限）`;
+      const cur = base[a] || 0;
+      if (!p) return `${a}（無上限）目前 ${cur}`;
       if (p.limit <= 0) return `${a} 上限0（不可強）`;
-      return `${a} 上限${p.limit}→理論最高<strong>${p.final}</strong>（決勝+${p.burst}，超+${p.over}）`;
+      if (cur >= p.limit) {
+        return `${a} 目前 ${cur}（已封／≥上限${p.limit}）`;
+      }
+      // 從目前值出發：若已可決勝則目前+burst，否則仍以理論天花板為目標
+      const fromHere =
+        cur >= p.pre ? cur + p.burst : p.final;
+      return `${a} 目前${cur}／上限${p.limit}→可衝<strong>${fromHere}</strong>（理論頂${p.final}，決勝+${p.burst}）`;
     });
     return lines.join("<br/>");
   }
@@ -318,10 +326,14 @@
 
   /**
    * 單軸最大決勝方案：逐屬性「堆到上限-1 → 用 maxBurst 決勝」。
-   * 決勝輪對該屬性保證是全搜尋最大 4 件加成。
+   * opts.startTotals / opts.maxNewRounds：接著既有配置時從目前總值繼續，只產出新輪次。
    */
-  function simulateProvenMaxBurst(order, maxR, strategyMeta) {
-    const totals = Object.fromEntries(ATTRS.map((a) => [a, 0]));
+  function simulateProvenMaxBurst(order, maxR, strategyMeta, opts = {}) {
+    const startTotals =
+      opts.startTotals || Object.fromEntries(ATTRS.map((a) => [a, 0]));
+    const maxNew =
+      opts.maxNewRounds != null ? opts.maxNewRounds : maxR;
+    const totals = { ...startTotals };
     const planRounds = [];
     const burstMap = {};
     for (const a of order) {
@@ -330,7 +342,7 @@
 
     const applyParts = (parts, note) => {
       if (!parts || parts.length !== SLOTS) return false;
-      if (planRounds.length >= maxR) return false;
+      if (planRounds.length >= maxNew) return false;
       const round = emptyRound();
       round.parts = parts.slice();
       const cap = roundPartCap(round);
@@ -357,10 +369,13 @@
       const burstInfo = burstMap[attr];
       if (!burstInfo?.parts) continue;
 
-      while (planRounds.length < maxR && canEnhanceAttr(totals[attr] || 0, attr)) {
+      while (
+        planRounds.length < maxNew &&
+        canEnhanceAttr(totals[attr] || 0, attr)
+      ) {
         const P = totals[attr] || 0;
         const roomUnder = L - 1 - P;
-        const roundsLeft = maxR - planRounds.length;
+        const roundsLeft = maxNew - planRounds.length;
 
         // 最後一輪或已在上限前一檔 → 最大決勝
         if (roundsLeft <= 1 || roomUnder <= 0) {
@@ -380,11 +395,10 @@
             `${strategyMeta.name} · ${attr}堆疊(+${park.cap}→貼前檔)`
           );
           if (!ok) break;
-          // 若加完仍未到前檔且還有輪，繼續迴圈
           continue;
         }
 
-        // 找不到合法堆疊 4 件（增量都會超過前檔）→ 直接決勝
+        // 找不到合法堆疊 4 件 → 直接決勝
         const ok = applyParts(
           burstInfo.parts,
           `${strategyMeta.name} · ${attr}決勝(最大+${burstInfo.burst})`
@@ -744,22 +758,26 @@
 
   /**
    * 模擬一組策略 → 完整輪次與最終總值。
-   * 只服務使用者優先；單一屬性達/超上限則該屬性停，其餘優先繼續。
+   * opts.startTotals / opts.maxNewRounds：接著配時從既有總值繼續。
    */
-  function simulateAutoPlan(strategy, maxR) {
+  function simulateAutoPlan(strategy, maxR, opts = {}) {
     if (strategy.mode === "proven") {
       const order =
         Array.isArray(strategy.order) && strategy.order.length
           ? strategy.order
           : userPriorityAttrs();
-      return simulateProvenMaxBurst(order, maxR, strategy);
+      return simulateProvenMaxBurst(order, maxR, strategy, opts);
     }
 
-    let totals = Object.fromEntries(ATTRS.map((a) => [a, 0]));
+    const startTotals =
+      opts.startTotals || Object.fromEntries(ATTRS.map((a) => [a, 0]));
+    const maxNew =
+      opts.maxNewRounds != null ? opts.maxNewRounds : maxR;
+    let totals = { ...startTotals };
     const planRounds = [];
 
-    for (let r = 0; r < maxR; r++) {
-      const roundsLeft = maxR - r;
+    for (let r = 0; r < maxNew; r++) {
+      const roundsLeft = maxNew - r;
       const focus = strategyFocusAttrs(totals, strategy);
       if (!focus.length) break;
 
@@ -904,8 +922,29 @@
 
   /** @type {ReturnType<typeof simulateAutoPlan>[]} */
   let pendingAutoPlans = [];
+  /** @type {"scratch"|"continue"} */
+  let autoAllocMode = "scratch";
+  /** 接著配時保留的既有輪次 */
+  let autoAllocBaseRounds = [];
 
-  function openAutoPlanModal(plans, maxR) {
+  function hasExistingProgress() {
+    return rounds.some(
+      (r) =>
+        r.parts.some((p) => p !== "" && p != null) ||
+        ATTRS.some((a) => (r.values?.[a] || 0) !== 0) ||
+        !!(r.note && String(r.note).trim())
+    );
+  }
+
+  function getContinueContext() {
+    const maxR = Number(maxEnhanceCount);
+    const used = rounds.length;
+    const remaining = Number.isFinite(maxR) ? Math.max(0, maxR - used) : 0;
+    const startTotals = grandTotal();
+    return { maxR, used, remaining, startTotals };
+  }
+
+  function openAutoPlanModal(plans, maxR, ctx) {
     pendingAutoPlans = plans;
     const list = $("#autoPlanList");
     if (!list) return;
@@ -914,20 +953,35 @@
     const priHint = targets
       .map((a) => `${a}${getAutoPriority(a)}`)
       .join("／");
-    const peakHtml = formatPeakSummary(targets);
+    const isContinue = ctx && ctx.mode === "continue";
+    const peakHtml = formatPeakSummary(
+      targets,
+      isContinue ? ctx.startTotals : null
+    );
+    const modeLine = isContinue
+      ? `模式：<b>接著配</b>（已強化 ${ctx.used} 次，再配最多 ${ctx.remaining} 輪）`
+      : `模式：<b>從頭配</b>（共 ${maxR} 輪）`;
 
     list.innerHTML =
       (peakHtml
-        ? `<div class="peak-summary"><div class="peak-title">各優先·單軸理論最高（先貼上限前一檔＋決勝最大4件）</div><div class="peak-body">${peakHtml}</div><div class="peak-hint">下方「★ 最高Ｘ」即專攻該軸到此天花板；次數不夠時可能到不了。</div></div>`
+        ? `<div class="peak-summary"><div class="peak-title">各優先·可衝目標${
+            isContinue ? "（從目前數值起算）" : "（單軸理論最高）"
+          }</div><div class="peak-body">${peakHtml}</div><div class="peak-hint">「★ 最高Ｘ」專攻該軸；接著配會保留你已有的輪次再往後加。</div></div>`
         : "") +
       plans
         .map((plan, idx) => {
           const s = plan.strategy;
+          const roundLabel = isContinue
+            ? `新増 ${plan.roundCount} 輪（接在已有 ${ctx.used} 輪後）`
+            : `輪次 <b>${plan.roundCount}</b>／${maxR}`;
           return `<button type="button" class="auto-plan-card plan-user" data-plan-idx="${idx}">
           <h4>${escapeAttr(s.name)}</h4>
           <p class="plan-desc">${escapeAttr(s.desc)}</p>
           ${buildRadarSvg(plan.totals)}
-          ${formatPlanStats(plan.totals, plan.roundCount, maxR)}
+          ${formatPlanStats(plan.totals, plan.roundCount, maxR).replace(
+            /輪次 <b>\d+<\/b>／\d+/,
+            roundLabel
+          )}
           <span class="plan-pick btn-primary" style="display:block;padding:6px 8px;border-radius:8px;font-size:13px">選擇此方案</span>
         </button>`;
         })
@@ -935,9 +989,9 @@
 
     const intro = document.querySelector(".auto-plan-intro");
     if (intro) {
-      intro.innerHTML = `依你的優先產生組合（目前：<b>${
+      intro.innerHTML = `${modeLine}<br/>依你的優先（<b>${
         priHint || "未設定"
-      }</b>）。同填 1＝都想盡量超限。雷達${shape}。點選方案回填主表。`;
+      }</b>）產生組合。雷達${shape}。點選方案回填主表。`;
     }
 
     openModal("autoPlanModal");
@@ -948,21 +1002,135 @@
       toast("方案無效");
       return;
     }
-    rounds = plan.rounds.map((r) => ({
+    const newRounds = plan.rounds.map((r) => ({
       parts: r.parts.slice(),
       values: { ...r.values },
       locks: { ...r.locks },
       note: r.note || "",
     }));
+
+    if (autoAllocMode === "continue" && autoAllocBaseRounds.length) {
+      rounds = [
+        ...autoAllocBaseRounds.map((r) => ({
+          parts: r.parts.slice(),
+          values: { ...r.values },
+          locks: { ...r.locks },
+          note: r.note || "",
+        })),
+        ...newRounds,
+      ];
+    } else {
+      rounds = newRounds;
+    }
+
     closeModal("autoPlanModal");
     pendingAutoPlans = [];
+    autoAllocBaseRounds = [];
     renderAll();
-    toast(`已套用「${plan.strategy.name}」（${plan.roundCount} 輪）`);
+    const msg =
+      autoAllocMode === "continue"
+        ? `已接上「${plan.strategy.name}」（+${plan.roundCount} 輪，共 ${rounds.length} 輪）`
+        : `已套用「${plan.strategy.name}」（${plan.roundCount} 輪）`;
+    autoAllocMode = "scratch";
+    toast(msg);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function buildAndShowAutoPlans(mode) {
+    const maxR = Number(maxEnhanceCount);
+    const isContinue = mode === "continue";
+    let opts = {};
+    let budget = maxR;
+    let ctx = { mode: "scratch", used: 0, remaining: maxR, startTotals: null };
+
+    if (isContinue) {
+      const c = getContinueContext();
+      if (c.remaining < 1) {
+        toast(`已用滿強化次數（${c.used}/${c.maxR}），無法接著配`);
+        return;
+      }
+      autoAllocMode = "continue";
+      autoAllocBaseRounds = rounds.map((r) => ({
+        parts: r.parts.slice(),
+        values: { ...r.values },
+        locks: { ...r.locks },
+        note: r.note || "",
+      }));
+      opts = {
+        startTotals: { ...c.startTotals },
+        maxNewRounds: c.remaining,
+      };
+      budget = c.remaining;
+      ctx = {
+        mode: "continue",
+        used: c.used,
+        remaining: c.remaining,
+        startTotals: c.startTotals,
+      };
+    } else {
+      autoAllocMode = "scratch";
+      autoAllocBaseRounds = [];
+      opts = {};
+      budget = maxR;
+      ctx = {
+        mode: "scratch",
+        used: 0,
+        remaining: maxR,
+        startTotals: null,
+      };
+    }
+
+    toast(
+      isContinue
+        ? `正在從已強化 ${ctx.used} 次接著計算（剩餘 ${ctx.remaining} 輪）…`
+        : "正在依你的優先從頭計算組合方案…"
+    );
+
+    setTimeout(() => {
+      clearMaxBurstCache();
+      const strategies = buildUserPriorityStrategies();
+      const plans = [];
+      const seen = new Set();
+      for (const strategy of strategies) {
+        const plan = simulateAutoPlan(strategy, maxR, opts);
+        if (!plan.rounds.length) continue;
+        if (plan.rounds.some((r) => !isPartsComplete(r))) continue;
+        const sig = ATTRS.map((a) => plan.totals[a] || 0).join(",");
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        plans.push(plan);
+      }
+
+      plans.sort((p, q) => {
+        const over = (plan) => {
+          let s = 0;
+          for (const a of userPriorityAttrs()) {
+            const lim = getAttrLimit(a);
+            const v = plan.totals[a] || 0;
+            if (lim != null && v > lim) s += v - lim;
+          }
+          if (plan.strategy.mode === "proven") s += 0.5;
+          else if (plan.strategy.maximizeOvershoot) s += 0.01;
+          return s;
+        };
+        return over(q) - over(p);
+      });
+
+      if (!plans.length) {
+        toast(
+          isContinue
+            ? "無法接著配置：優先可能都已封頂，或剩餘次數不足"
+            : "無法自動配置：請檢查上限、優先與零件資料"
+        );
+        return;
+      }
+
+      openAutoPlanModal(plans, maxR, ctx);
+    }, 30);
+  }
+
   /**
-   * 自動配：產生多組方案 → 彈窗選雷達圖 → 回填主表
+   * 自動配：先選從頭／接著 → 多方案雷達 → 回填主表
    */
   function runAutoAllocate() {
     const maxR = Number(maxEnhanceCount);
@@ -982,47 +1150,47 @@
       return;
     }
 
-    toast("正在依你的優先計算組合方案…");
+    const canContinue = hasExistingProgress();
+    const cont = getContinueContext();
+    const hint = $("#autoModeHint");
+    const btnCont = $("#autoModeContinue");
+    const btnScratch = $("#autoModeScratch");
 
-    setTimeout(() => {
-      clearMaxBurstCache();
-      const strategies = buildUserPriorityStrategies();
-      const plans = [];
-      const seen = new Set();
-      for (const strategy of strategies) {
-        const plan = simulateAutoPlan(strategy, maxR);
-        if (!plan.rounds.length) continue;
-        if (plan.rounds.some((r) => !isPartsComplete(r))) continue;
-        // 用最終總值簽名去重（不同順序若結果相同只留一個）
-        const sig = ATTRS.map((a) => plan.totals[a] || 0).join(",");
-        if (seen.has(sig)) continue;
-        seen.add(sig);
-        plans.push(plan);
+    if (hint) {
+      if (canContinue) {
+        hint.innerHTML = `目前已有 <b>${cont.used}</b> 輪配置（強化次數上限 ${
+          cont.maxR
+        }，剩餘 <b>${cont.remaining}</b> 次）。<br/>
+        <b>從頭配</b>：忽略現有輪次，依優先重新規劃。<br/>
+        <b>接著配</b>：保留現有輪次與數值，只規劃剩餘次數（仍依優先）。`;
+      } else {
+        hint.innerHTML = `尚未有既有強化進度，將從頭依你的優先規劃（共 ${maxR} 輪）。`;
       }
+    }
 
-      // 超限合計高的在前；單軸最大決勝再略加權
-      plans.sort((p, q) => {
-        const over = (plan) => {
-          let s = 0;
-          for (const a of userPriorityAttrs()) {
-            const lim = getAttrLimit(a);
-            const v = plan.totals[a] || 0;
-            if (lim != null && v > lim) s += v - lim;
-          }
-          if (plan.strategy.mode === "proven") s += 0.5;
-          else if (plan.strategy.maximizeOvershoot) s += 0.01;
-          return s;
-        };
-        return over(q) - over(p);
-      });
-
-      if (!plans.length) {
-        toast("無法自動配置：請檢查上限、優先與零件資料");
-        return;
+    if (btnScratch) {
+      btnScratch.innerHTML = `從頭配<small>重新規劃全部 ${maxR} 輪</small>`;
+    }
+    if (btnCont) {
+      if (!canContinue) {
+        btnCont.disabled = true;
+        btnCont.innerHTML = `接著現有配置<small>目前沒有可接續的進度</small>`;
+      } else if (cont.remaining < 1) {
+        btnCont.disabled = true;
+        btnCont.innerHTML = `接著現有配置<small>已用滿 ${cont.used}/${cont.maxR} 次</small>`;
+      } else {
+        btnCont.disabled = false;
+        btnCont.innerHTML = `接著現有配置<small>已強化 ${cont.used} 次 → 再配 ${cont.remaining} 輪</small>`;
       }
+    }
 
-      openAutoPlanModal(plans, maxR);
-    }, 30);
+    // 沒有既有進度時直接從頭，少一步
+    if (!canContinue) {
+      buildAndShowAutoPlans("scratch");
+      return;
+    }
+
+    openModal("autoModeModal");
   }
 
   function syncEnhanceCountInput() {
@@ -1423,6 +1591,22 @@
 
     $("#autoAllocBtn")?.addEventListener("click", runAutoAllocate);
 
+    $("#autoModeClose")?.addEventListener("click", () =>
+      closeModal("autoModeModal")
+    );
+    $("#autoModeCancel")?.addEventListener("click", () =>
+      closeModal("autoModeModal")
+    );
+    $("#autoModeScratch")?.addEventListener("click", () => {
+      closeModal("autoModeModal");
+      buildAndShowAutoPlans("scratch");
+    });
+    $("#autoModeContinue")?.addEventListener("click", () => {
+      if ($("#autoModeContinue")?.disabled) return;
+      closeModal("autoModeModal");
+      buildAndShowAutoPlans("continue");
+    });
+
     $("#autoPlanClose")?.addEventListener("click", () =>
       closeModal("autoPlanModal")
     );
@@ -1430,6 +1614,7 @@
       closeModal("autoPlanModal")
     );
     $("#autoPlanList")?.addEventListener("click", (e) => {
+      if (e.target.closest(".peak-summary")) return;
       const card = e.target.closest("[data-plan-idx]");
       if (!card) return;
       const idx = Number(card.dataset.planIdx);
