@@ -91,6 +91,8 @@
 
   function autoFillRound(roundIndex) {
     const round = rounds[roundIndex];
+    // 未選滿 4 零件時不改寫數值，保留使用者原本的強化素質
+    if (!isPartsComplete(round)) return;
     const cap = roundPartCap(round);
     const prev = prevTotalsBefore(roundIndex);
     // 拆分模式：本輪增量 = 可強化屬性的零件上限加總
@@ -1234,10 +1236,13 @@
           })
           .join("");
 
+        const partsOk = isPartsComplete(round);
         const attrItems = uiAttrs().map((a) => {
           const sealed = !canEnhanceAttr(prev[a] || 0, a);
           const gain = sealed ? 0 : cap[a] || 0;
+          // 未選滿零件時一律顯示全部素質，不因精簡模式隱藏
           const hidden =
+            partsOk &&
             !showAllAttrs &&
             gain === 0 &&
             !(round.values[a] > 0) &&
@@ -1266,7 +1271,6 @@
             </div>`;
         }).join("");
 
-        const partsOk = isPartsComplete(round);
         const filledN = countFilledParts(round);
         const incompleteHint = partsOk
           ? ""
@@ -1603,7 +1607,8 @@
         return;
       }
       rounds[ri].parts[si] = next;
-      if (autoFill) autoFillRound(ri);
+      // 僅在選滿 4 零件時自動填充；未滿則保留原本素質
+      if (autoFill && isPartsComplete(rounds[ri])) autoFillRound(ri);
       renderAll();
     }
   }
