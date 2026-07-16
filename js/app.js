@@ -18,8 +18,8 @@
   let autoFill = true;
   let showAllAttrs = true;
   let maxLimit = Object.fromEntries(ATTRS.map((a) => [a, ""]));
-  /** 自動配優先順序：數字愈小愈優先（1 最高） */
-  let attrPriority = Object.fromEntries(ATTRS.map((a, i) => [a, i + 1]));
+  /** 自動配優先順序：數字愈小愈優先（1 最高）；空白 = 不列入自動配 */
+  let attrPriority = Object.fromEntries(ATTRS.map((a) => [a, ""]));
   /** 強化次數上限（可強化總輪數） */
   let maxEnhanceCount = "";
   /** 目前套用的船隻鍵 type|name，空字串表示手動 */
@@ -106,23 +106,36 @@
     }
   }
 
+  /** 有填有效優先數字才參與自動配（空白 = 不列入） */
+  function getAutoPriority(attr) {
+    const raw = attrPriority[attr];
+    if (raw === "" || raw == null) return null;
+    const p = Number(raw);
+    if (!Number.isFinite(p) || p <= 0) return null;
+    return p;
+  }
+
+  function isAutoAllocTarget(attr) {
+    return getAttrLimit(attr) != null && getAutoPriority(attr) != null;
+  }
+
   function priorityWeight(attr) {
-    const p = Number(attrPriority[attr]);
-    if (!Number.isFinite(p) || p <= 0) return 0.01;
+    const p = getAutoPriority(attr);
+    if (p == null) return 0;
     return 1 / p;
   }
 
-  /** 評估零件對「有上限且尚可強化」屬性的貢獻分數（優先序愈高權重愈大） */
+  /** 評估零件對「有上限 + 有優先 + 尚可強化」屬性的貢獻分數 */
   function scorePartForTotals(part, totals) {
     let score = 0;
     for (const a of ATTRS) {
+      if (!isAutoAllocTarget(a)) continue;
       const lim = getAttrLimit(a);
-      // 自動配只以有設上限的屬性為目標
-      if (lim == null) continue;
       const bonus = part.bonus[a] || 0;
       if (bonus <= 0) continue;
       if (!canEnhanceAttr(totals[a] || 0, a)) continue;
       const w = priorityWeight(a);
+      if (w <= 0) continue;
       const remain = Math.max(0, lim - (totals[a] || 0));
       score += bonus * w * 100;
       score += Math.min(bonus, Math.max(remain, 1)) * w * 15;
@@ -146,9 +159,9 @@
       return;
     }
 
-    const hasAnyLimit = ATTRS.some((a) => getAttrLimit(a) != null);
-    if (!hasAnyLimit) {
-      toast("請至少設定一個屬性「上限」，自動配才有目標");
+    const hasAnyTarget = ATTRS.some((a) => isAutoAllocTarget(a));
+    if (!hasAnyTarget) {
+      toast("請至少設定一組「上限」+「優先」（優先留白表示不列入自動配）");
       return;
     }
 
@@ -164,9 +177,9 @@
     const newRounds = [];
 
     for (let r = 0; r < maxR; r++) {
-      // 目標屬性（有設上限）皆已達標/封頂則提早結束
+      // 目標屬性（有上限 + 有優先）皆已達標/封頂則提早結束
       const activeTargets = ATTRS.filter(
-        (a) => getAttrLimit(a) != null && canEnhanceAttr(totals[a] || 0, a)
+        (a) => isAutoAllocTarget(a) && canEnhanceAttr(totals[a] || 0, a)
       );
       if (!activeTargets.length) break;
 
@@ -529,7 +542,7 @@
           </div>
           <div class="priority-box">
             <span>優先</span>
-            <input class="priority-input" type="number" data-priority="${a}" value="${pri}" min="1" max="99" title="數字愈小愈優先" />
+            <input class="priority-input" type="number" data-priority="${a}" value="${pri}" min="1" max="99" placeholder="—" title="數字愈小愈優先；留白則不列入自動配" />
           </div>
         </div>`;
     }).join("");
@@ -703,8 +716,14 @@
         renderAll();
       }
       if (t.matches(".priority-input")) {
-        const n = Number(t.value);
-        attrPriority[t.dataset.priority] = Number.isFinite(n) && n > 0 ? n : t.value;
+        const raw = t.value.trim();
+        if (raw === "") {
+          attrPriority[t.dataset.priority] = "";
+        } else {
+          const n = Number(raw);
+          attrPriority[t.dataset.priority] =
+            Number.isFinite(n) && n > 0 ? n : "";
+        }
       }
     });
     $("#summary").addEventListener("click", (e) => {
