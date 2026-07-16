@@ -1,6 +1,16 @@
-/* ---- theme tokens (light default) ---- */
-:root,
-html[data-theme="light"] {
+/* ---- theme tokens ----
+   data-theme = 使用者偏好 (system|light|dark)
+   data-color-scheme = 實際套用 (light|dark)，由 JS 解析後寫入
+*/
+:root {
+  --radius: 12px;
+  --font: "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", "Segoe UI",
+    sans-serif;
+}
+
+/* 淺色（預設／明確 light） */
+html,
+html[data-color-scheme="light"] {
   color-scheme: light;
   --bg: #d6ebe0;
   --bg-deep: #b8d9c8;
@@ -49,74 +59,17 @@ html[data-theme="light"] {
   --plan-user-bg: linear-gradient(180deg, #f0f7ff 0%, #f8fbf9 55%);
   --plan-user-title: #1c7ed6;
   --footer-line: #a9c0b4;
-  --radius: 12px;
-  --font: "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", "Segoe UI",
-    sans-serif;
 }
 
-/* system → dark */
-@media (prefers-color-scheme: dark) {
-  html[data-theme="system"],
-  html:not([data-theme]) {
-    color-scheme: dark;
-    --bg: #0f1a17;
-    --bg-deep: #152822;
-    --bg-glow: rgba(80, 160, 130, 0.12);
-    --panel: rgba(28, 38, 36, 0.94);
-    --panel-border: rgba(255, 255, 255, 0.06);
-    --text: #e8eef2;
-    --text-soft: #c5d0d8;
-    --muted: #9aabb8;
-    --border: #2f3f3a;
-    --border-strong: #3d524a;
-    --primary: #5b9fd4;
-    --primary-deep: #3d7eb0;
-    --primary-soft: rgba(91, 159, 212, 0.18);
-    --success: #51cf66;
-    --success-deep: #37b24d;
-    --warning: #ffa94d;
-    --warning-bg: #e67700;
-    --danger: #ff6b6b;
-    --danger-soft: rgba(255, 107, 107, 0.12);
-    --danger-border: rgba(255, 107, 107, 0.35);
-    --purple: #b197fc;
-    --purple-deep: #9775fa;
-    --btn-bg: #24302c;
-    --btn-hover: #2e3d38;
-    --btn-border-hover: #4a635a;
-    --input-bg: #1a2421;
-    --card-bg: rgba(22, 32, 30, 0.9);
-    --soft-bg: #1e2a26;
-    --soft-bg-2: #1a2e28;
-    --soft-bg-3: #1c2a32;
-    --warn-bg: rgba(245, 159, 0, 0.16);
-    --warn-ring: rgba(245, 159, 0, 0.4);
-    --lock-bg: rgba(255, 107, 107, 0.14);
-    --lock-border: rgba(255, 107, 107, 0.4);
-    --track: rgba(255, 255, 255, 0.1);
-    --bar-ok: #40c057;
-    --modal-mask: rgba(0, 0, 0, 0.62);
-    --shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
-    --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.45);
-    --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.55);
-    --toast-bg: #e8eef2;
-    --toast-fg: #12201c;
-    --on-accent: #ffffff;
-    --plan-user-border: #4dabf7;
-    --plan-user-bg: linear-gradient(180deg, #1a2a38 0%, #1c2a32 55%);
-    --plan-user-title: #74c0fc;
-    --footer-line: #3d524a;
-  }
-}
-
-/* forced dark */
-html[data-theme="dark"] {
+/* 深色（明確 dark／.theme-dark，蓋過上面的 html 預設） */
+html[data-color-scheme="dark"],
+html.theme-dark {
   color-scheme: dark;
   --bg: #0f1a17;
   --bg-deep: #152822;
   --bg-glow: rgba(80, 160, 130, 0.12);
-  --panel: rgba(28, 38, 36, 0.94);
-  --panel-border: rgba(255, 255, 255, 0.06);
+  --panel: rgba(28, 38, 36, 0.96);
+  --panel-border: rgba(255, 255, 255, 0.08);
   --text: #e8eef2;
   --text-soft: #c5d0d8;
   --muted: #9aabb8;
@@ -138,7 +91,7 @@ html[data-theme="dark"] {
   --btn-hover: #2e3d38;
   --btn-border-hover: #4a635a;
   --input-bg: #1a2421;
-  --card-bg: rgba(22, 32, 30, 0.9);
+  --card-bg: rgba(22, 32, 30, 0.92);
   --soft-bg: #1e2a26;
   --soft-bg-2: #1a2e28;
   --soft-bg-3: #1c2a32;

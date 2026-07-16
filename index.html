@@ -13,12 +13,24 @@
     <title>大航海傳說 · 船隻強化模擬器（繁中版）</title>
     <script>
       (function () {
+        function resolve(pref) {
+          if (pref === "light" || pref === "dark") return pref;
+          try {
+            return window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          } catch (e) {
+            return "light";
+          }
+        }
         try {
           var t = localStorage.getItem("gvlShip_theme") || "system";
           if (t !== "light" && t !== "dark" && t !== "system") t = "system";
           document.documentElement.setAttribute("data-theme", t);
+          document.documentElement.setAttribute("data-color-scheme", resolve(t));
         } catch (e) {
           document.documentElement.setAttribute("data-theme", "system");
+          document.documentElement.setAttribute("data-color-scheme", "light");
         }
       })();
     </script>

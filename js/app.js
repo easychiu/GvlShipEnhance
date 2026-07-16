@@ -1715,10 +1715,27 @@
         .join("");
   }
 
+  function resolveColorScheme(pref) {
+    if (pref === "light" || pref === "dark") return pref;
+    try {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+    } catch {
+      return "light";
+    }
+  }
+
   function applyTheme(mode) {
     const m =
       mode === "light" || mode === "dark" || mode === "system" ? mode : "system";
-    document.documentElement.setAttribute("data-theme", m);
+    const resolved = resolveColorScheme(m);
+    const root = document.documentElement;
+    root.setAttribute("data-theme", m);
+    root.setAttribute("data-color-scheme", resolved);
+    // 同步 class，方便除錯與提高覆蓋力
+    root.classList.toggle("theme-dark", resolved === "dark");
+    root.classList.toggle("theme-light", resolved === "light");
     try {
       localStorage.setItem(THEME_KEY, m);
     } catch {
@@ -1736,16 +1753,35 @@
       saved = "system";
     }
     applyTheme(saved);
-    $("#themeSelect")?.addEventListener("change", (e) => {
-      applyTheme(e.target.value);
-      toast(
-        e.target.value === "system"
-          ? "外觀：跟隨系統"
-          : e.target.value === "dark"
-            ? "外觀：深色"
-            : "外觀：淺色"
-      );
-    });
+
+    const sel = $("#themeSelect");
+    if (sel) {
+      sel.value = saved;
+      sel.addEventListener("change", () => {
+        applyTheme(sel.value);
+        const label =
+          sel.value === "system"
+            ? `跟隨系統（目前${resolveColorScheme("system") === "dark" ? "深色" : "淺色"}）`
+            : sel.value === "dark"
+              ? "深色"
+              : "淺色";
+        toast(`外觀：${label}`);
+      });
+    }
+
+    // 系統主題變更時，若設為跟隨系統則即時更新
+    try {
+      const mq = window.matchMedia("(prefers-color-scheme: dark)");
+      const onChange = () => {
+        const pref =
+          document.documentElement.getAttribute("data-theme") || "system";
+        if (pref === "system") applyTheme("system");
+      };
+      if (mq.addEventListener) mq.addEventListener("change", onChange);
+      else if (mq.addListener) mq.addListener(onChange);
+    } catch {
+      /* ignore */
+    }
   }
 
   function init() {
