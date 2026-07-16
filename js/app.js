@@ -238,6 +238,44 @@
       return w;
     };
 
+    // ★ 嚴格超限：先貼上限-1，決勝輪用最大零件堆超限值（達上限後不能再強，只能靠這一下）
+    push({
+      id: "strict-overshoot",
+      name: "★ 嚴格超限",
+      desc: `逐項先貼上限前一檔，再用最大 4 零件一口氣超限（${priLabel}），超限值越高越好`,
+      mode: "serial",
+      usePark: true,
+      maximizeOvershoot: true,
+      order: targets.slice(),
+      weights: weightSerial(targets),
+    });
+
+    push({
+      id: "strict-overshoot-sync",
+      name: "★ 嚴格超限（同步）",
+      desc: `優先屬性同步貼上限前一檔，再一起用最大加成超限（${priLabel}）`,
+      mode: "parallel",
+      usePark: true,
+      maximizeOvershoot: true,
+      weights: weightByPri(),
+    });
+
+    // 嚴格超限 × 不同攻頂順序（2～3 個優先時）
+    if (targets.length >= 2 && targets.length <= 3) {
+      for (const order of permutations(targets)) {
+        push({
+          id: `strict-order-${order.join("-")}`,
+          name: `★ 嚴格 ${order.map((a) => SHORT[a]).join("→")}`,
+          desc: `嚴格超限順序：${order.join(" → ")}（每項貼前檔再最大決勝）`,
+          mode: "serial",
+          usePark: true,
+          maximizeOvershoot: true,
+          order: order.slice(),
+          weights: weightSerial(order),
+        });
+      }
+    }
+
     push({
       id: "sync-burst",
       name: "同步超限",
@@ -358,6 +396,7 @@
     if (!focus.length) return { valid: false, score: -1, cap };
 
     const usePark = !!strategy.usePark;
+    const maxOver = !!strategy.maximizeOvershoot;
     let score = 0;
     let valid = true;
 
@@ -377,19 +416,33 @@
           valid = false;
           break;
         }
-        score += C * w * 100;
-        score += (C / Math.max(roomUnder, 1)) * w * 40;
+        // 堆疊：盡量貼近上限前一檔，為決勝留最大一擊
+        score += C * w * (maxOver ? 90 : 100);
+        const close = 1 - (roomUnder - C) / Math.max(roomUnder, 1);
+        score += Math.max(0, close) * w * (maxOver ? 120 : 40);
+        if (maxOver && P + C === L - 1) score += w * 200;
       } else {
-        // 激進：最大化加成與超限幅度
-        score += C * w * 250;
-        if (P + C >= L) score += (P + C - L + 1) * w * 35;
+        // 決勝：嚴格最大化「超限值」與本輪加成
+        const after = P + C;
+        const over = Math.max(0, after - L);
+        if (maxOver) {
+          score += C * w * 500;
+          score += over * w * 1200;
+          // 從上限前一檔（或極接近）出發再加分
+          if (P >= L - 1) score += C * w * 400;
+          else if (P < L) score += over * w * 200;
+        } else {
+          score += C * w * 250;
+          if (after >= L) score += (over + 1) * w * 35;
+        }
       }
     }
 
-    // 懲罰非優先順便成長
+    // 懲罰非優先順便成長（嚴格超限時懲罰更重）
+    const pen = maxOver ? 22 : 14;
     for (const a of enhanceableAttrs(totals)) {
       if (isAutoAllocTarget(a)) continue;
-      score -= (cap[a] || 0) * 14;
+      score -= (cap[a] || 0) * pen;
     }
     return { valid, score, cap };
   }
@@ -546,9 +599,27 @@
       const mark = lim != null && v >= lim && lim > 0 ? "✓" : "";
       return `${SHORT[a]}${v}${mark}`;
     });
+    // 優先屬性超限合計（越高越好）
+    let overSum = 0;
+    const overBits = [];
+    for (const a of userPriorityAttrs()) {
+      const lim = getAttrLimit(a);
+      const v = totals[a] || 0;
+      if (lim != null && v > lim) {
+        const o = v - lim;
+        overSum += o;
+        overBits.push(`${SHORT[a]}+${o}`);
+      }
+    }
+    const overLine =
+      overSum > 0
+        ? `<br/><span style="color:#c92a2a">超限合計 <b>${overSum}</b>${
+            overBits.length ? `（${overBits.join(" ")}）` : ""
+          }</span>`
+        : "";
     return `<div class="plan-stats">輪次 <b>${roundCount}</b>／${maxR}<br/>${bits.join(
       " · "
-    )}</div>`;
+    )}${overLine}</div>`;
   }
 
   /** @type {ReturnType<typeof simulateAutoPlan>[]} */
@@ -642,15 +713,19 @@
         plans.push(plan);
       }
 
-      // 超限總幅度高的排前面，方便選「越高越好」
+      // 優先屬性「超限合計」高的排前面；嚴格超限方案再加權
       plans.sort((p, q) => {
-        const over = (t) =>
-          userPriorityAttrs().reduce((s, a) => {
+        const over = (plan) => {
+          let s = 0;
+          for (const a of userPriorityAttrs()) {
             const lim = getAttrLimit(a);
-            const v = t[a] || 0;
-            return s + (lim != null && v > lim ? v - lim : v);
-          }, 0);
-        return over(q.totals) - over(p.totals);
+            const v = plan.totals[a] || 0;
+            if (lim != null && v > lim) s += v - lim;
+          }
+          if (plan.strategy.maximizeOvershoot) s += 0.01;
+          return s;
+        };
+        return over(q) - over(p);
       });
 
       if (!plans.length) {
