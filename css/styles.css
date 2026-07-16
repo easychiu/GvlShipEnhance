@@ -504,6 +504,20 @@ button:active {
   text-align: center;
 }
 
+.round-card.incomplete {
+  border-color: #ffa8a8;
+  box-shadow: 0 0 0 1px rgba(250, 82, 82, 0.2);
+}
+
+.round-warn {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #c92a2a;
+  background: #fff5f5;
+  border-radius: 8px;
+}
+
 .attr-item.sealed {
   opacity: 0.55;
 }

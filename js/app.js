@@ -125,134 +125,100 @@
     return 1 / p;
   }
 
+  /** 本輪是否已選滿 4 個不重複零件 */
+  function isPartsComplete(round) {
+    if (!round || !Array.isArray(round.parts)) return false;
+    const filled = round.parts.filter((p) => p !== "" && p != null);
+    if (filled.length !== SLOTS) return false;
+    return new Set(filled.map(String)).size === SLOTS;
+  }
+
+  function countFilledParts(round) {
+    return (round?.parts || []).filter((p) => p !== "" && p != null).length;
+  }
+
   /**
-   * 評估零件對優先目標的貢獻。
-   * 堆疊期（&lt; 上限-1）：偏向能貼近上限前一檔的零件；
-   * 決勝期（已在上限-1）：偏向最大加成以便一口氣超限。
+   * 評估固定 4 零件組合：堆疊期加滿後不可超過上限-1；決勝期最大化加成。
    */
-  function scorePartForTotals(part, totals) {
+  function scoreFixedFour(partIds, totals, roundsLeft) {
+    const cap = roundPartCap({ parts: partIds });
     let score = 0;
+    let valid = true;
+    let active = 0;
     for (const a of ATTRS) {
       if (!isAutoAllocTarget(a)) continue;
-      const lim = getAttrLimit(a);
-      const bonus = part.bonus[a] || 0;
-      if (bonus <= 0) continue;
-      const p = totals[a] || 0;
-      if (!canEnhanceAttr(p, a)) continue;
+      const P = totals[a] || 0;
+      if (!canEnhanceAttr(P, a)) continue;
+      active++;
+      const L = getAttrLimit(a);
+      const C = cap[a] || 0;
       const w = priorityWeight(a);
-      if (w <= 0) continue;
-      const underMax = lim - 1;
-      if (p < underMax) {
-        const need = underMax - p;
-        score += Math.min(bonus, need) * w * 120;
-        score += bonus * w * 8;
+      const roomUnder = L - 1 - P;
+      const park = roundsLeft > 1 && roomUnder > 0;
+      if (park) {
+        if (P + C > L - 1) {
+          valid = false;
+          break;
+        }
+        score += C * w * 100;
+        score += (C / Math.max(roomUnder, 1)) * w * 40;
       } else {
-        // 已貼上限前一檔 → 決勝一口氣，越大越好（如 +52）
-        score += bonus * w * 260;
+        score += C * w * 250;
       }
     }
-    return score;
+    if (!active) return { valid: false, score: -1, cap };
+    return { valid, score, cap };
   }
 
   /**
-   * 本輪是否處於「堆疊控管」：還有後續輪次，且加滿候選零件會超過上限-1。
-   * 此時改以「少選零件 + 數值加滿」貼近上限前一檔，避免增量與零件不符。
+   * 窮舉 C(零件數, 4)：每輪必須剛好 4 個不同零件。
+   * 優先合法堆疊組合；若無則退回最大決勝加成組合。
    */
-  function needsParkControl(prevTotal, attr, fullCap, roundsLeft) {
-    if (!isAutoAllocTarget(attr)) return false;
-    if (!canEnhanceAttr(prevTotal, attr)) return false;
-    if (roundsLeft <= 1) return false;
-    const L = getAttrLimit(attr);
-    const P = prevTotal || 0;
-    const C = fullCap || 0;
-    const roomUnder = L - 1 - P;
-    return roomUnder > 0 && P + C > L - 1;
-  }
-
-  /**
-   * 從候選零件中挑子集：數值一律依零件加滿，但堆疊期不可超過上限-1。
-   * 決勝期（已貼上限-1 或最後一輪）改最大化加成以便超限。
-   */
-  function refinePartsSubset(partIds, totals, roundsLeft) {
-    const ids = partIds.filter((id) => id !== "" && id != null);
-    if (!ids.length) return ids;
-
-    const n = ids.length;
-    let bestSub = null;
+  function pickBestFourParts(totals, roundsLeft) {
+    const all = Object.values(PARTS);
+    const n = all.length;
+    let best = null;
     let bestScore = -Infinity;
+    let fallback = null;
+    let fallbackScore = -Infinity;
 
-    for (let mask = 1; mask < 1 << n; mask++) {
-      const sub = [];
-      for (let i = 0; i < n; i++) {
-        if (mask & (1 << i)) sub.push(ids[i]);
-      }
-      const cap = roundPartCap({ parts: sub });
-      let valid = true;
-      let score = 0;
-
-      for (const a of ATTRS) {
-        if (!isAutoAllocTarget(a)) continue;
-        const P = totals[a] || 0;
-        if (!canEnhanceAttr(P, a)) continue;
-        const L = getAttrLimit(a);
-        const C = cap[a] || 0;
-        const w = priorityWeight(a);
-        const roomUnder = L - 1 - P;
-        const park = roundsLeft > 1 && roomUnder > 0;
-
-        if (park) {
-          // 堆疊：加滿後必須 ≤ 上限-1，並盡量貼近
-          if (P + C > L - 1) {
-            valid = false;
-            break;
+    for (let i = 0; i < n - 3; i++) {
+      for (let j = i + 1; j < n - 2; j++) {
+        for (let k = j + 1; k < n - 1; k++) {
+          for (let l = k + 1; l < n; l++) {
+            const ids = [all[i].id, all[j].id, all[k].id, all[l].id];
+            const { valid, score, cap } = scoreFixedFour(
+              ids,
+              totals,
+              roundsLeft
+            );
+            if (valid && score > bestScore) {
+              bestScore = score;
+              best = ids;
+            }
+            // 不合法堆疊時的後備：只看決勝分（會提早超限）
+            let fb = 0;
+            for (const a of ATTRS) {
+              if (!isAutoAllocTarget(a)) continue;
+              if (!canEnhanceAttr(totals[a] || 0, a)) continue;
+              fb += (cap[a] || 0) * priorityWeight(a);
+            }
+            if (fb > fallbackScore) {
+              fallbackScore = fb;
+              fallback = ids;
+            }
           }
-          score += C * w * 100;
-          // 愈接近上限-1 愈好
-          score += (1 - (L - 1 - P - C) / Math.max(L, 1)) * w * 30;
-        } else {
-          // 決勝：最大化本輪零件加成（可超限）
-          score += C * w * 250;
         }
       }
-      if (!valid) continue;
-      score += sub.length * 0.01;
-      if (score > bestScore) {
-        bestScore = score;
-        bestSub = sub;
-      }
     }
-
-    // 找不到合法堆疊子集時退回原清單（最後一輪會直接超限）
-    return bestSub && bestScore > -Infinity ? bestSub : ids;
-  }
-
-  function greedyPickParts(totals) {
-    const partList = Object.values(PARTS);
-    const chosen = [];
-    const used = new Set();
-    for (let slot = 0; slot < SLOTS; slot++) {
-      let best = null;
-      let bestScore = 0;
-      for (const p of partList) {
-        if (used.has(p.id)) continue;
-        const s = scorePartForTotals(p, totals);
-        if (s > bestScore) {
-          bestScore = s;
-          best = p;
-        }
-      }
-      if (!best || bestScore <= 0) break;
-      chosen.push(best.id);
-      used.add(best.id);
-    }
-    return chosen;
+    return best || fallback;
   }
 
   /**
    * 依次數上限、屬性上限、優先順序自動配置各輪零件與數值。
-   * - 只為「有優先」的屬性選零件／決定是否繼續開輪
-   * - 本輪增量一律 = 零件加總（可強化時加滿；已封則 0），不再暗改數值
-   * - 堆疊期用「少選零件」貼上限-1，決勝期一次選滿可超限
+   * - 每輪固定 4 個不重複零件（不可缺）
+   * - 增量 = 零件加總（已封為 0）
+   * - 堆疊期在「滿 4 件」前提下貼上限-1；決勝期最大化可超限
    */
   function runAutoAllocate() {
     const maxR = Number(maxEnhanceCount);
@@ -289,24 +255,13 @@
       );
       if (!activeTargets.length) break;
 
-      let chosen = greedyPickParts(totals);
-      if (!chosen.length) break;
-
-      const fullCap = roundPartCap({ parts: chosen });
-      const anyPark = activeTargets.some((a) =>
-        needsParkControl(totals[a] || 0, a, fullCap[a] || 0, roundsLeft)
-      );
-      if (anyPark) {
-        chosen = refinePartsSubset(chosen, totals, roundsLeft);
-      }
+      const chosen = pickBestFourParts(totals, roundsLeft);
+      if (!chosen || chosen.length !== SLOTS) break;
 
       const round = emptyRound();
-      round.parts = Array(SLOTS)
-        .fill("")
-        .map((_, i) => chosen[i] ?? "");
+      round.parts = chosen.slice();
       const cap = roundPartCap(round);
 
-      // 增量與零件一致：可強化則加滿零件上限；已封為 0
       const delta = Object.fromEntries(ATTRS.map((a) => [a, 0]));
       for (const a of ATTRS) {
         if (!canEnhanceAttr(totals[a] || 0, a)) {
@@ -346,10 +301,14 @@
       toast("無法自動配置：請檢查上限、優先與零件資料");
       return;
     }
+    if (newRounds.some((r) => !isPartsComplete(r))) {
+      toast("自動配異常：存在未滿 4 零件的輪次");
+      return;
+    }
 
     rounds = newRounds;
     renderAll();
-    toast(`自動配完成：共 ${rounds.length} 輪（增量＝零件加成）`);
+    toast(`自動配完成：共 ${rounds.length} 輪（每輪 4 零件）`);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -590,8 +549,14 @@
             </div>`;
         }).join("");
 
+        const partsOk = isPartsComplete(round);
+        const filledN = countFilledParts(round);
+        const incompleteHint = partsOk
+          ? ""
+          : `<div class="round-warn">⚠ 每輪須選滿 ${SLOTS} 個不同零件（目前 ${filledN}/${SLOTS}）</div>`;
+
         return `
-          <div class="round-card" data-ri="${ri}">
+          <div class="round-card${partsOk ? "" : " incomplete"}" data-ri="${ri}">
             <div class="round-head">
               <span class="round-number">強化 ${ri + 1}${countHint}</span>
               <div class="part-selects">${selects}</div>
@@ -606,6 +571,7 @@
                 <button type="button" class="btn-danger" data-act="delete" data-ri="${ri}">刪除</button>
               </div>
             </div>
+            ${incompleteHint}
             <div class="attr-row">${attrItems}
               <div class="row-tools">
                 <small style="color:var(--muted)" title="可強化時增量應等於零件加總；已封屬性為 0">本輪增量：${ATTRS.filter((a) => delta[a] || (cap[a] && !canEnhanceAttr(prev[a] || 0, a))).map((a) => {
@@ -917,6 +883,10 @@
       const ri = +actBtn.dataset.ri;
       const act = actBtn.dataset.act;
       if (act === "fill") {
+        if (!isPartsComplete(rounds[ri])) {
+          toast(`請先選滿 ${SLOTS} 個不同零件再智能填充`);
+          return;
+        }
         autoFillRound(ri);
         renderAll();
         toast(`已填充強化 ${ri + 1}`);
