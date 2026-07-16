@@ -73,6 +73,12 @@
           </div>
           <div class="auto-alloc-bar">
             <label class="enhance-count-label">
+              套用船隻上限
+              <select id="shipLimitSelector" title="選擇已收錄上限的船隻，一鍵帶入屬性上限">
+                <option value="">— 手動填寫 —</option>
+              </select>
+            </label>
+            <label class="enhance-count-label">
               強化次數上限
               <input
                 type="number"
@@ -84,7 +90,7 @@
               />
             </label>
             <span class="hint-inline"
-              >自動配依「優先」+「上限」：未達上限可再強（本輪可超限），剛好達上限後下一輪不可再強該屬性</span
+              >自動配依「優先」+「上限」：未達上限可再強（本輪可超限），剛好達上限後下一輪不可再強該屬性。純帆船槳力上限為 0。</span
             >
           </div>
           <div id="summary" class="summary-list"></div>
@@ -188,6 +194,10 @@
           <p>
             <strong>13. 強化次數上限 + 自動配：</strong>
             設定可強化總輪數後按「自動配」：依各屬性「優先」（數字愈小愈優先）與上限，自動選不重複零件並排出各輪配置。
+          </p>
+          <p>
+            <strong>14. 套用船隻上限：</strong>
+            屬性彙總可選已收錄船隻（如 Lv.110 裝甲戰列艦／威尼斯槳帆戰艦／大型高速帆船）一鍵帶入強化上限。純帆船槳力上限為 0，開局即無法強化槳力。
           </p>
         </div>
         <div class="modal-actions">

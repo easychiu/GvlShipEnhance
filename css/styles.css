@@ -388,6 +388,12 @@ button:active {
   padding: 5px 6px;
 }
 
+.enhance-count-label select {
+  min-width: 200px;
+  max-width: min(360px, 70vw);
+  padding: 5px 8px;
+}
+
 .hint-inline {
   flex: 1 1 220px;
   font-size: 12px;

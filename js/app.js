@@ -22,6 +22,8 @@
   let attrPriority = Object.fromEntries(ATTRS.map((a, i) => [a, i + 1]));
   /** 強化次數上限（可強化總輪數） */
   let maxEnhanceCount = "";
+  /** 目前套用的船隻鍵 type|name，空字串表示手動 */
+  let selectedShipKey = "";
   let sourceTrace = { attr: null, global: false, ri: null };
   let floatVisible = false;
 
@@ -224,6 +226,79 @@
     const el = $("#maxEnhanceCountInput");
     if (el && el.value !== String(maxEnhanceCount)) {
       el.value = maxEnhanceCount;
+    }
+  }
+
+  /** 扁平化有 limits 的船隻清單 */
+  function shipsWithLimits() {
+    const list = [];
+    for (const [type, arr] of Object.entries(SHIPS)) {
+      for (const s of arr) {
+        if (s.limits) {
+          list.push({
+            type,
+            key: `${type}|${s.name}`,
+            ...s,
+          });
+        }
+      }
+    }
+    return list;
+  }
+
+  function findShipByKey(key) {
+    if (!key) return null;
+    const [type, ...rest] = key.split("|");
+    const name = rest.join("|");
+    const arr = SHIPS[type];
+    if (!arr) return null;
+    return arr.find((s) => s.name === name) || null;
+  }
+
+  function applyShipLimits(key, { silent = false } = {}) {
+    selectedShipKey = key || "";
+    const ship = findShipByKey(key);
+    if (!ship || !ship.limits) {
+      if (!silent && key) toast("此船尚無收錄強化上限");
+      return false;
+    }
+    maxLimit = Object.fromEntries(
+      ATTRS.map((a) => [
+        a,
+        ship.limits[a] != null && ship.limits[a] !== ""
+          ? String(ship.limits[a])
+          : "",
+      ])
+    );
+    if (autoFill) {
+      rounds.forEach((_, i) => autoFillRound(i));
+    }
+    renderAll();
+    syncShipLimitSelector();
+    if (!silent) {
+      const pure = ship.pureSail || ship.limits.槳力 === 0 ? "（純帆·無槳）" : "";
+      toast(`已套用 Lv.${ship.lv} ${ship.name} 強化上限${pure}`);
+    }
+    return true;
+  }
+
+  function initShipLimitSelector() {
+    const sel = $("#shipLimitSelector");
+    if (!sel) return;
+    const opts = shipsWithLimits()
+      .map((s) => {
+        const pure = s.pureSail || s.limits?.槳力 === 0 ? " · 純帆" : "";
+        const icon = D.typeIcons[s.type] || "";
+        return `<option value="${escapeAttr(s.key)}">${icon} Lv.${s.lv} ${escapeAttr(s.name)}${pure}</option>`;
+      })
+      .join("");
+    sel.innerHTML = `<option value="">— 手動填寫 —</option>${opts}`;
+  }
+
+  function syncShipLimitSelector() {
+    const sel = $("#shipLimitSelector");
+    if (sel && sel.value !== selectedShipKey) {
+      sel.value = selectedShipKey;
     }
   }
 
@@ -460,6 +535,7 @@
     }).join("");
 
     syncEnhanceCountInput();
+    syncShipLimitSelector();
     renderFloat(total);
   }
 
@@ -518,6 +594,16 @@
     $("#maxEnhanceCountInput")?.addEventListener("input", (e) => {
       maxEnhanceCount = e.target.value;
       renderRounds();
+    });
+
+    $("#shipLimitSelector")?.addEventListener("change", (e) => {
+      const key = e.target.value;
+      if (!key) {
+        selectedShipKey = "";
+        toast("已改為手動填寫上限");
+        return;
+      }
+      applyShipLimits(key);
     });
 
     $("#modeToggleBtn").addEventListener("click", () => {
@@ -591,6 +677,7 @@
       if (e.target.closest(".limit-input")) return;
       if (e.target.closest(".priority-input")) return;
       if (e.target.closest(".auto-alloc-bar")) return;
+      if (e.target.closest("select")) return;
       if (e.target.closest(".summary-label")) return;
       if (e.target.closest("button")) return;
       floatVisible = !floatVisible;
@@ -606,6 +693,9 @@
       const t = e.target;
       if (t.matches(".limit-input")) {
         maxLimit[t.dataset.limit] = t.value;
+        // 手動改上限後不再綁定船隻預設
+        selectedShipKey = "";
+        syncShipLimitSelector();
         // 上限變更會影響「已封」狀態與自動填充語意
         if (autoFill) {
           rounds.forEach((_, i) => autoFillRound(i));
@@ -776,6 +866,7 @@
       maxLimit,
       attrPriority: { ...attrPriority },
       maxEnhanceCount,
+      selectedShipKey,
       rounds,
       exportedAt: new Date().toISOString(),
     };
@@ -825,6 +916,9 @@
         }
         if (data.maxEnhanceCount != null && data.maxEnhanceCount !== undefined) {
           maxEnhanceCount = data.maxEnhanceCount;
+        }
+        if (data.selectedShipKey) {
+          selectedShipKey = data.selectedShipKey;
         }
         renderAll();
         toast(
@@ -907,6 +1001,7 @@
       maxLimit: { ...maxLimit },
       attrPriority: { ...attrPriority },
       maxEnhanceCount,
+      selectedShipKey,
       rounds: JSON.parse(JSON.stringify(rounds)),
       createdAt: new Date().toISOString(),
     });
@@ -968,6 +1063,7 @@
         if (p.maxEnhanceCount != null && p.maxEnhanceCount !== undefined) {
           maxEnhanceCount = p.maxEnhanceCount;
         }
+        if (p.selectedShipKey) selectedShipKey = p.selectedShipKey;
         renderAll();
         toast(
           deduped
@@ -1037,6 +1133,7 @@
   function init() {
     initFilters();
     initTypeSelector();
+    initShipLimitSelector();
     rounds = [emptyRound()];
     bindStatic();
     renderAll();
