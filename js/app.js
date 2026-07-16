@@ -204,6 +204,148 @@
     return out;
   }
 
+  /** 自動配可用零件池（純帆排除槳） */
+  function getPartPool() {
+    return Object.values(PARTS).filter(
+      (p) => !(isPureSailProfile() && isPaddlePart(p))
+    );
+  }
+
+  /** 窮舉所有 4 件組合，回呼 (ids, cap) */
+  function forEachFourCombo(fn) {
+    const all = getPartPool();
+    const n = all.length;
+    if (n < SLOTS) return;
+    for (let i = 0; i < n - 3; i++) {
+      for (let j = i + 1; j < n - 2; j++) {
+        for (let k = j + 1; k < n - 1; k++) {
+          for (let l = k + 1; l < n; l++) {
+            const ids = [all[i].id, all[j].id, all[k].id, all[l].id];
+            fn(ids, roundPartCap({ parts: ids }));
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * 單屬性「決勝一擊」最大零件加成（4 件不重複全搜尋）
+   * 達上限後不能再強，超限只靠這一輪 → 此值即單軸最大可能超限加成。
+   */
+  function computeMaxBurst(attr) {
+    let bestIds = null;
+    let bestC = -1;
+    forEachFourCombo((ids, cap) => {
+      const c = cap[attr] || 0;
+      if (c > bestC) {
+        bestC = c;
+        bestIds = ids.slice();
+      }
+    });
+    return { parts: bestIds, burst: Math.max(0, bestC) };
+  }
+
+  /** 堆疊：4 件加滿後該屬性增量 ≤ roomUnder，並盡量大 */
+  function pickParkPartsForAttr(attr, roomUnder) {
+    if (roomUnder <= 0) return null;
+    let bestIds = null;
+    let bestC = -1;
+    forEachFourCombo((ids, cap) => {
+      const c = cap[attr] || 0;
+      if (c > 0 && c <= roomUnder && c > bestC) {
+        bestC = c;
+        bestIds = ids.slice();
+      }
+    });
+    if (!bestIds) return null;
+    return { parts: bestIds, cap: bestC };
+  }
+
+  /**
+   * 單軸最大決勝方案：逐屬性「堆到上限-1 → 用 maxBurst 決勝」。
+   * 決勝輪對該屬性保證是全搜尋最大 4 件加成。
+   */
+  function simulateProvenMaxBurst(order, maxR, strategyMeta) {
+    const totals = Object.fromEntries(ATTRS.map((a) => [a, 0]));
+    const planRounds = [];
+    const burstMap = {};
+    for (const a of order) {
+      burstMap[a] = computeMaxBurst(a);
+    }
+
+    const applyParts = (parts, note) => {
+      if (!parts || parts.length !== SLOTS) return false;
+      if (planRounds.length >= maxR) return false;
+      const round = emptyRound();
+      round.parts = parts.slice();
+      const cap = roundPartCap(round);
+      const delta = Object.fromEntries(ATTRS.map((a) => [a, 0]));
+      for (const a of ATTRS) {
+        if (!canEnhanceAttr(totals[a] || 0, a)) {
+          delta[a] = 0;
+        } else {
+          delta[a] = cap[a] || 0;
+        }
+        totals[a] = (totals[a] || 0) + delta[a];
+      }
+      if (!ATTRS.some((a) => (delta[a] || 0) > 0)) return false;
+      if (cumulativeMode) round.values = { ...totals };
+      else round.values = { ...delta };
+      round.note = note;
+      planRounds.push(round);
+      return true;
+    };
+
+    for (const attr of order) {
+      const L = getAttrLimit(attr);
+      if (L == null) continue;
+      const burstInfo = burstMap[attr];
+      if (!burstInfo?.parts) continue;
+
+      while (planRounds.length < maxR && canEnhanceAttr(totals[attr] || 0, attr)) {
+        const P = totals[attr] || 0;
+        const roomUnder = L - 1 - P;
+        const roundsLeft = maxR - planRounds.length;
+
+        // 最後一輪或已在上限前一檔 → 最大決勝
+        if (roundsLeft <= 1 || roomUnder <= 0) {
+          const ok = applyParts(
+            burstInfo.parts,
+            `${strategyMeta.name} · ${attr}決勝(最大+${burstInfo.burst})`
+          );
+          if (!ok) break;
+          continue;
+        }
+
+        // 堆疊：貼近上限-1
+        const park = pickParkPartsForAttr(attr, roomUnder);
+        if (park && park.cap > 0) {
+          const ok = applyParts(
+            park.parts,
+            `${strategyMeta.name} · ${attr}堆疊(+${park.cap}→貼前檔)`
+          );
+          if (!ok) break;
+          // 若加完仍未到前檔且還有輪，繼續迴圈
+          continue;
+        }
+
+        // 找不到合法堆疊 4 件（增量都會超過前檔）→ 直接決勝
+        const ok = applyParts(
+          burstInfo.parts,
+          `${strategyMeta.name} · ${attr}決勝(最大+${burstInfo.burst})`
+        );
+        if (!ok) break;
+      }
+    }
+
+    return {
+      strategy: strategyMeta,
+      rounds: planRounds,
+      totals: { ...totals },
+      roundCount: planRounds.length,
+    };
+  }
+
   /**
    * 只依「使用者填的優先」產生多組自動配策略（排列組合）。
    * 例：護甲1／船耐1／轉向1 → 均衡超限 + 偏重各軸 + 不同攻頂順序
@@ -239,7 +381,30 @@
       return w;
     };
 
-    // ★ 嚴格超限：先貼上限-1，決勝輪用最大零件堆超限值（達上限後不能再強，只能靠這一下）
+    // ★ 單軸最大決勝（可證明決勝輪 = 全搜尋最大 4 件加成）
+    push({
+      id: "proven-max-burst",
+      name: "★ 單軸最大決勝",
+      desc: `逐軸堆到上限前一檔，決勝用全搜尋最大 4 件（${priLabel}）；單軸超限加成保證最大`,
+      mode: "proven",
+      order: targets.slice(),
+    });
+
+    if (targets.length >= 2 && targets.length <= 3) {
+      for (const order of permutations(targets)) {
+        // 與預設順序相同的略過（上面已有）
+        if (order.join("-") === targets.join("-")) continue;
+        push({
+          id: `proven-max-${order.join("-")}`,
+          name: `★ 最大決勝 ${order.map((a) => SHORT[a]).join("→")}`,
+          desc: `單軸最大決勝，順序：${order.join(" → ")}`,
+          mode: "proven",
+          order: order.slice(),
+        });
+      }
+    }
+
+    // ★ 嚴格超限：啟發式（多輪貪婪）
     push({
       id: "strict-overshoot",
       name: "★ 嚴格超限",
@@ -499,6 +664,14 @@
    * 只服務使用者優先；單一屬性達/超上限則該屬性停，其餘優先繼續。
    */
   function simulateAutoPlan(strategy, maxR) {
+    if (strategy.mode === "proven") {
+      const order =
+        Array.isArray(strategy.order) && strategy.order.length
+          ? strategy.order
+          : userPriorityAttrs();
+      return simulateProvenMaxBurst(order, maxR, strategy);
+    }
+
     let totals = Object.fromEntries(ATTRS.map((a) => [a, 0]));
     const planRounds = [];
 
@@ -725,7 +898,7 @@
         plans.push(plan);
       }
 
-      // 優先屬性「超限合計」高的排前面；嚴格超限方案再加權
+      // 超限合計高的在前；單軸最大決勝再略加權
       plans.sort((p, q) => {
         const over = (plan) => {
           let s = 0;
@@ -734,7 +907,8 @@
             const v = plan.totals[a] || 0;
             if (lim != null && v > lim) s += v - lim;
           }
-          if (plan.strategy.maximizeOvershoot) s += 0.01;
+          if (plan.strategy.mode === "proven") s += 0.5;
+          else if (plan.strategy.maximizeOvershoot) s += 0.01;
           return s;
         };
         return over(q) - over(p);
