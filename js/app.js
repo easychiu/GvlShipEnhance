@@ -138,21 +138,52 @@
   }
 
   /**
-   * 評估固定 4 零件組合：堆疊期加滿後不可超過上限-1；決勝期最大化加成。
+   * 本輪規劃目標屬性：
+   * - priority：有填優先且尚未封頂
+   * - residual：優先都做完後，改衝「有上限且未封」的其餘屬性，用來用光強化次數
    */
-  function scoreFixedFour(partIds, totals, roundsLeft) {
+  function planningAttrs(totals, mode) {
+    if (mode === "priority") {
+      return ATTRS.filter(
+        (a) => isAutoAllocTarget(a) && canEnhanceAttr(totals[a] || 0, a)
+      );
+    }
+    const limited = ATTRS.filter(
+      (a) => getAttrLimit(a) != null && canEnhanceAttr(totals[a] || 0, a)
+    );
+    if (limited.length) return limited;
+    return ATTRS.filter((a) => canEnhanceAttr(totals[a] || 0, a));
+  }
+
+  function planWeight(attr, mode) {
+    if (mode === "priority") return priorityWeight(attr);
+    // 剩餘輪：愈高優先填「還差很多」的有上限屬性
+    const lim = getAttrLimit(attr);
+    if (lim == null) return 0.05;
+    return 1 + lim / 1000;
+  }
+
+  /**
+   * 評估固定 4 零件組合：堆疊期加滿後不可超過上限-1；決勝期最大化加成。
+   * mode = priority | residual
+   */
+  function scoreFixedFour(partIds, totals, roundsLeft, mode) {
     const cap = roundPartCap({ parts: partIds });
+    const targets = planningAttrs(totals, mode);
+    if (!targets.length) return { valid: false, score: -1, cap };
+
     let score = 0;
     let valid = true;
-    let active = 0;
-    for (const a of ATTRS) {
-      if (!isAutoAllocTarget(a)) continue;
+    for (const a of targets) {
       const P = totals[a] || 0;
-      if (!canEnhanceAttr(P, a)) continue;
-      active++;
       const L = getAttrLimit(a);
       const C = cap[a] || 0;
-      const w = priorityWeight(a);
+      const w = planWeight(a, mode);
+      // 無上限屬性：不控管堆疊，直接最大化
+      if (L == null) {
+        score += C * w * 50;
+        continue;
+      }
       const roomUnder = L - 1 - P;
       const park = roundsLeft > 1 && roomUnder > 0;
       if (park) {
@@ -166,21 +197,20 @@
         score += C * w * 250;
       }
     }
-    if (!active) return { valid: false, score: -1, cap };
     return { valid, score, cap };
   }
 
   /**
    * 窮舉 C(零件數, 4)：每輪必須剛好 4 個不同零件。
-   * 優先合法堆疊組合；若無則退回最大決勝加成組合。
    */
-  function pickBestFourParts(totals, roundsLeft) {
+  function pickBestFourParts(totals, roundsLeft, mode) {
     const all = Object.values(PARTS);
     const n = all.length;
     let best = null;
     let bestScore = -Infinity;
     let fallback = null;
     let fallbackScore = -Infinity;
+    const targets = planningAttrs(totals, mode);
 
     for (let i = 0; i < n - 3; i++) {
       for (let j = i + 1; j < n - 2; j++) {
@@ -190,18 +220,16 @@
             const { valid, score, cap } = scoreFixedFour(
               ids,
               totals,
-              roundsLeft
+              roundsLeft,
+              mode
             );
             if (valid && score > bestScore) {
               bestScore = score;
               best = ids;
             }
-            // 不合法堆疊時的後備：只看決勝分（會提早超限）
             let fb = 0;
-            for (const a of ATTRS) {
-              if (!isAutoAllocTarget(a)) continue;
-              if (!canEnhanceAttr(totals[a] || 0, a)) continue;
-              fb += (cap[a] || 0) * priorityWeight(a);
+            for (const a of targets) {
+              fb += (cap[a] || 0) * planWeight(a, mode);
             }
             if (fb > fallbackScore) {
               fallbackScore = fb;
@@ -215,10 +243,10 @@
   }
 
   /**
-   * 依次數上限、屬性上限、優先順序自動配置各輪零件與數值。
-   * - 每輪固定 4 個不重複零件（不可缺）
-   * - 增量 = 零件加總（已封為 0）
-   * - 堆疊期在「滿 4 件」前提下貼上限-1；決勝期最大化可超限
+   * 自動配：盡量用光「強化次數上限」。
+   * 1) 先衝有優先的屬性（堆疊→超限決勝）
+   * 2) 優先都封頂後，繼續用剩餘次數衝其他有上限且未封的屬性
+   * 每輪固定 4 個不同零件；增量 = 零件加總（已封為 0）
    */
   function runAutoAllocate() {
     const maxR = Number(maxEnhanceCount);
@@ -250,12 +278,13 @@
 
     for (let r = 0; r < maxR; r++) {
       const roundsLeft = maxR - r;
-      const activeTargets = ATTRS.filter(
-        (a) => isAutoAllocTarget(a) && canEnhanceAttr(totals[a] || 0, a)
-      );
-      if (!activeTargets.length) break;
+      const priOpen = planningAttrs(totals, "priority");
+      const mode = priOpen.length ? "priority" : "residual";
+      const targets = planningAttrs(totals, mode);
+      // 所有可強化屬性都封了才停（否則用光次數）
+      if (!targets.length) break;
 
-      const chosen = pickBestFourParts(totals, roundsLeft);
+      const chosen = pickBestFourParts(totals, roundsLeft, mode);
       if (!chosen || chosen.length !== SLOTS) break;
 
       const round = emptyRound();
@@ -272,7 +301,7 @@
         totals[a] = (totals[a] || 0) + delta[a];
       }
 
-      const useful = activeTargets.some((a) => (delta[a] || 0) > 0);
+      const useful = targets.some((a) => (delta[a] || 0) > 0);
       if (!useful) break;
 
       if (cumulativeMode) {
@@ -281,19 +310,23 @@
         round.values = { ...delta };
       }
 
-      const burst = activeTargets.some((a) => {
+      const burst = targets.some((a) => {
         const lim = getAttrLimit(a);
+        if (lim == null) return false;
         const prev = (totals[a] || 0) - (delta[a] || 0);
         return (
-          lim != null &&
-          (delta[a] || 0) > 0 &&
-          prev < lim &&
-          (totals[a] || 0) >= lim
+          (delta[a] || 0) > 0 && prev < lim && (totals[a] || 0) >= lim
         );
       });
-      round.note = burst
-        ? `自動配 #${r + 1} · 超限決勝`
-        : `自動配 #${r + 1} · 堆疊`;
+      const phase =
+        mode === "priority"
+          ? burst
+            ? "優先·超限決勝"
+            : "優先·堆疊"
+          : burst
+            ? "剩餘·決勝"
+            : "剩餘·用光次數";
+      round.note = `自動配 #${r + 1} · ${phase}`;
       newRounds.push(round);
     }
 
@@ -308,7 +341,12 @@
 
     rounds = newRounds;
     renderAll();
-    toast(`自動配完成：共 ${rounds.length} 輪（每輪 4 零件）`);
+    const usedAll = newRounds.length >= maxR;
+    toast(
+      usedAll
+        ? `自動配完成：已用光 ${maxR} 次強化（每輪 4 零件）`
+        : `自動配完成：${newRounds.length}/${maxR} 輪（其餘屬性也已無法再強化）`
+    );
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
