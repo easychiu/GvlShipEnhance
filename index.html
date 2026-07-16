@@ -11,11 +11,32 @@
       content="大航海傳說船隻強化模擬器（繁體中文版）— 零件配置、屬性加總、方案匯入匯出與本機預設"
     />
     <title>大航海傳說 · 船隻強化模擬器（繁中版）</title>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("gvlShip_theme") || "system";
+          if (t !== "light" && t !== "dark" && t !== "system") t = "system";
+          document.documentElement.setAttribute("data-theme", t);
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "system");
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="css/styles.css" />
   </head>
   <body>
     <div id="app">
       <div class="container">
+        <div class="theme-bar">
+          <label class="theme-switch" title="外觀主題">
+            <span>🎨 外觀</span>
+            <select id="themeSelect" aria-label="主題">
+              <option value="system">跟隨系統</option>
+              <option value="light">淺色</option>
+              <option value="dark">深色</option>
+            </select>
+          </label>
+        </div>
         <header class="site-header">
           <h1>🚢 大航海傳說 · 船隻強化模擬器</h1>
           <p>繁體中文版 · 零件配置 · 屬性規劃 · 本機方案儲存</p>
@@ -198,6 +219,10 @@
           <p>
             <strong>14. 套用船隻上限：</strong>
             屬性彙總可選已收錄船隻一鍵帶入強化上限。純帆船（槳力上限 0）不顯示槳力列、篩選與槳類零件，無法選擇槳。
+          </p>
+          <p>
+            <strong>15. 外觀主題：</strong>
+            頁面右上可選「跟隨系統／淺色／深色」，會記住你的選擇。
           </p>
         </div>
         <div class="modal-actions">

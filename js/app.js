@@ -10,6 +10,7 @@
   const SLOTS = D.slotsPerRound;
   const PRESET_KEY = "gvlShip_presets_v1";
   const HELP_KEY = "gvlShip_hasSeenHelp";
+  const THEME_KEY = "gvlShip_theme";
 
   /** @type {{ parts: (string|number)[], values: Record<string, number>, locks: Record<string, boolean>, note: string }[]} */
   let rounds = [];
@@ -542,6 +543,13 @@
     };
   }
 
+  function cssVar(name, fallback) {
+    const v = getComputedStyle(document.documentElement)
+      .getPropertyValue(name)
+      .trim();
+    return v || fallback;
+  }
+
   function buildRadarSvg(totals) {
     const axes = chartAttrs();
     const n = axes.length;
@@ -549,6 +557,10 @@
     const cx = size / 2;
     const cy = size / 2;
     const R = size * 0.34;
+    const primary = cssVar("--primary", "#2b6cb0");
+    const danger = cssVar("--danger", "#c92a2a");
+    const text = cssVar("--text-soft", "#334");
+    const grid = cssVar("--border", "rgba(0,0,0,0.12)");
     const toXY = (i, ratio) => {
       const ang = -Math.PI / 2 + (i * 2 * Math.PI) / n;
       const rr = R * Math.max(0, Math.min(1.15, ratio));
@@ -561,7 +573,7 @@
       const pts = axes
         .map((_, i) => toXY(i, lv).join(","))
         .join(" ");
-      grids += `<polygon points="${pts}" fill="none" stroke="rgba(0,0,0,0.08)" stroke-width="1"/>`;
+      grids += `<polygon points="${pts}" fill="none" stroke="${grid}" stroke-width="1"/>`;
     }
 
     let spokes = "";
@@ -569,7 +581,7 @@
     let dataPts = [];
     axes.forEach((a, i) => {
       const [x1, y1] = toXY(i, 1);
-      spokes += `<line x1="${cx}" y1="${cy}" x2="${x1}" y2="${y1}" stroke="rgba(0,0,0,0.1)" stroke-width="1"/>`;
+      spokes += `<line x1="${cx}" y1="${cy}" x2="${x1}" y2="${y1}" stroke="${grid}" stroke-width="1"/>`;
       const lim = getAttrLimit(a);
       const val = totals[a] || 0;
       const maxV = Math.max(lim != null && lim > 0 ? lim : 0, val, 1);
@@ -579,14 +591,14 @@
       const [lx, ly] = toXY(i, 1.22);
       const reached = lim != null && val >= lim && lim > 0;
       labels += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" font-size="10" fill="${
-        reached ? "#c92a2a" : "#334"
+        reached ? danger : text
       }" font-weight="${reached ? "700" : "600"}">${SHORT[a]}</text>`;
     });
 
     const poly = dataPts.join(" ");
     return `<svg class="radar" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true">
       ${grids}${spokes}
-      <polygon points="${poly}" fill="rgba(43,108,176,0.28)" stroke="#2b6cb0" stroke-width="2" stroke-linejoin="round"/>
+      <polygon points="${poly}" fill="${primary}" fill-opacity="0.28" stroke="${primary}" stroke-width="2" stroke-linejoin="round"/>
       ${labels}
     </svg>`;
   }
@@ -1703,7 +1715,41 @@
         .join("");
   }
 
+  function applyTheme(mode) {
+    const m =
+      mode === "light" || mode === "dark" || mode === "system" ? mode : "system";
+    document.documentElement.setAttribute("data-theme", m);
+    try {
+      localStorage.setItem(THEME_KEY, m);
+    } catch {
+      /* ignore */
+    }
+    const sel = $("#themeSelect");
+    if (sel && sel.value !== m) sel.value = m;
+  }
+
+  function initTheme() {
+    let saved = "system";
+    try {
+      saved = localStorage.getItem(THEME_KEY) || "system";
+    } catch {
+      saved = "system";
+    }
+    applyTheme(saved);
+    $("#themeSelect")?.addEventListener("change", (e) => {
+      applyTheme(e.target.value);
+      toast(
+        e.target.value === "system"
+          ? "外觀：跟隨系統"
+          : e.target.value === "dark"
+            ? "外觀：深色"
+            : "外觀：淺色"
+      );
+    });
+  }
+
   function init() {
+    initTheme();
     initTypeSelector();
     initShipLimitSelector();
     rounds = [emptyRound()];
