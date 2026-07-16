@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta
+      name="description"
+      content="大航海傳說船隻強化模擬器（繁體中文版）— 零件配置、屬性加總、方案匯入匯出與本機預設"
+    />
+    <title>大航海傳說 · 船隻強化模擬器（繁中版）</title>
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div class="container">
+        <header class="site-header">
+          <h1>🚢 大航海傳說 · 船隻強化模擬器</h1>
+          <p>繁體中文版 · 零件配置 · 屬性規劃 · 本機方案儲存</p>
+        </header>
+
+        <section class="panel">
+          <div class="toolbar">
+            <div class="filter-group" id="filterGroup"></div>
+            <div class="action-group">
+              <div class="right-tools">
+                <button type="button" id="toggleEyeBtn" title="顯示全部 / 僅有加成屬性">
+                  👁️ 全顯
+                </button>
+                <button type="button" id="modeToggleBtn" class="btn-orange">
+                  累計模式
+                </button>
+                <button type="button" id="toggleInputs" class="btn-primary">
+                  顯示：累計總值
+                </button>
+              </div>
+              <div class="action-buttons">
+                <button type="button" id="addRoundBtn" class="btn-primary">
+                  ＋ 新增輪次
+                </button>
+                <button type="button" id="exportBtn" class="btn-blue">
+                  📥 匯出
+                </button>
+                <button type="button" id="importBtn" class="btn-purple">
+                  📤 匯入
+                </button>
+                <button type="button" id="autoFillBtn" class="btn-primary">
+                  自動填充: ON
+                </button>
+                <input
+                  type="file"
+                  id="importFile"
+                  accept="application/json,.json"
+                  hidden
+                />
+              </div>
+            </div>
+          </div>
+          <div id="rounds" class="round-list"></div>
+        </section>
+
+        <section class="panel panel-clickable" id="summary-panel" title="點擊開啟/關閉懸浮窗">
+          <div class="panel-title">
+            <h2>📊 屬性彙總</h2>
+            <button type="button" class="help-btn" id="helpGuideBtn">
+              📖 使用說明
+            </button>
+          </div>
+          <div id="summary" class="summary-list"></div>
+          <p class="empty-hint" style="padding-top: 4px; font-size: 12px">
+            提示：點擊本區塊可開關右下角懸浮彙總窗；點屬性名可篩選零件。
+          </p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title"><h2>📋 本機預設方案</h2></div>
+          <div class="preset-controls">
+            <select id="typeSelector"></select>
+            <button type="button" id="uploadBtn" class="btn-primary">
+              儲存目前配置
+            </button>
+          </div>
+          <div id="presetDisplayBox">
+            <p class="empty-hint">請選擇船隻類別以查看本機預設方案</p>
+          </div>
+        </section>
+
+        <footer class="footer">
+          <p>
+            <strong>製作：grok4.5</strong>
+            · 繁體中文重製版
+          </p>
+          <p>
+            資料結構參考
+            <a href="https://ship.pinetop.uk/" target="_blank" rel="noopener"
+              >ship.pinetop.uk</a
+            >
+            （原作者：安屠生•终）
+          </p>
+          <p>方案預設僅存於你的瀏覽器本機，不會上傳到伺服器。</p>
+        </footer>
+      </div>
+    </div>
+
+    <div id="float-summary">
+      <div id="float-summary-content"></div>
+    </div>
+
+    <!-- 使用說明 -->
+    <div class="modal" id="helpModal">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h3>📖 功能操作指南</h3>
+          <button type="button" class="icon-btn" id="helpClose" aria-label="關閉">
+            ×
+          </button>
+        </div>
+        <div class="help-body">
+          <p>
+            <strong>1. ⚡ 智能填充：</strong>
+            點擊輪次右側閃電，依目前選取零件加總該輪最大可強化值。
+          </p>
+          <p>
+            <strong>2. ✕ 快速清除：</strong>
+            清除該輪數值（不影響零件選擇）；已鎖定屬性不會被清掉。
+          </p>
+          <p>
+            <strong>3. 清除與刪除：</strong>
+            「清除零件」需連按兩次確認；「刪除」會移除整輪強化。
+          </p>
+          <p>
+            <strong>4. 🔒 鎖定：</strong>
+            點屬性旁「≤數字」可鎖定，自動填充不會覆蓋。
+          </p>
+          <p>
+            <strong>5. 🔍 來源追蹤：</strong>
+            點屬性縮寫（橫/縱/槳…）可高亮提供該屬性的零件；再點一次改全域追蹤。
+          </p>
+          <p>
+            <strong>6. 自動填充 ON/OFF：</strong>
+            開啟時更換零件會自動重算數值。
+          </p>
+          <p>
+            <strong>7. ∑ 累計 / 拆分：</strong>
+            累計模式輸入框為「到本輪為止總值」；拆分模式為「本輪增量」。
+          </p>
+          <p>
+            <strong>8. 👁️ 全顯 / 精簡：</strong>
+            精簡時只顯示本輪零件有加成的屬性。
+          </p>
+          <p>
+            <strong>9. 📊 懸浮窗：</strong>
+            點「屬性彙總」面板開關右下角懸浮窗，可拖曳移動。
+          </p>
+          <p>
+            <strong>10. 篩選：</strong>
+            頂部屬性按鈕可篩選零件下拉選單，只顯示對該屬性有加成的材料。
+          </p>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn-blue" id="helpOk">我知道了</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 儲存方案 -->
+    <div class="modal" id="uploadModal">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h3>儲存配置方案</h3>
+          <button type="button" class="icon-btn" id="uploadClose">×</button>
+        </div>
+        <div class="form-group">
+          <label>1. 選擇船隻（必選）</label>
+          <div class="form-row">
+            <select id="modalShipType"></select>
+            <select id="modalShipName"></select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>2. 描述</label>
+          <textarea
+            id="modalDesc"
+            rows="3"
+            placeholder="若不填寫，將自動帶入目前各屬性總值…"
+          ></textarea>
+        </div>
+        <div class="form-group">
+          <label>3. 作者</label>
+          <input type="text" id="modalAuthor" placeholder="你的暱稱" />
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="uploadCancel">取消</button>
+          <button type="button" class="btn-primary" id="uploadSubmit">
+            確認儲存
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status"></div>
+
+    <script src="js/data.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>
