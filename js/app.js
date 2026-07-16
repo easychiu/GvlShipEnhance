@@ -152,88 +152,171 @@
     return ATTRS.filter((a) => canEnhanceAttr(totals[a] || 0, a));
   }
 
-  /** 是否為「只聽使用者優先」類策略（優先做完可不浪費次數在其它屬性） */
-  function isUserPriorityStrategy(strategy) {
-    return (
-      strategy.id === "user-strict" ||
-      strategy.id === "user-serial" ||
-      strategy.id === "user-park"
-    );
+  /** 使用者有填優先的屬性（排序：數字小→大，同序照 ATTRS） */
+  function userPriorityAttrs() {
+    return ATTRS.filter((a) => isAutoAllocTarget(a)).sort((a, b) => {
+      const d = getAutoPriority(a) - getAutoPriority(b);
+      return d !== 0 ? d : ATTRS.indexOf(a) - ATTRS.indexOf(b);
+    });
+  }
+
+  function permutations(arr) {
+    if (arr.length <= 1) return [arr.slice()];
+    const out = [];
+    for (let i = 0; i < arr.length; i++) {
+      const rest = arr.slice(0, i).concat(arr.slice(i + 1));
+      for (const p of permutations(rest)) out.push([arr[i], ...p]);
+    }
+    return out;
   }
 
   /**
-   * 本輪選零件時的「主攻」屬性（已封的排除）
-   * user-strict / user-park：所有有填優先且未封
-   * user-serial：只打目前最優先（數字最小）那一檔
+   * 只依「使用者填的優先」產生多組自動配策略（排列組合）。
+   * 例：護甲1／船耐1／轉向1 → 均衡超限 + 偏重各軸 + 不同攻頂順序
    */
-  function strategyFocusAttrs(totals, strategy) {
-    const open = enhanceableAttrs(totals);
-    if (!open.length) return [];
+  function buildUserPriorityStrategies() {
+    const targets = userPriorityAttrs();
+    if (!targets.length) return [];
 
-    const priOpen = open
-      .filter((a) => isAutoAllocTarget(a))
-      .sort((a, b) => getAutoPriority(a) - getAutoPriority(b));
-    const limitedOpen = open.filter((a) => getAttrLimit(a) != null);
+    const priLabel = targets
+      .map((a) => `${SHORT[a]}${getAutoPriority(a)}`)
+      .join("·");
+    const strategies = [];
+    const push = (s) => strategies.push(s);
 
-    switch (strategy.id) {
-      case "user-strict":
-      case "user-park":
-        return priOpen;
-      case "user-serial":
-        if (!priOpen.length) return [];
-        {
-          const top = getAutoPriority(priOpen[0]);
-          return priOpen.filter((a) => getAutoPriority(a) === top);
-        }
-      case "burst":
-      case "park":
-      case "balanced":
-        if (priOpen.length) return priOpen;
-        return limitedOpen.length ? limitedOpen : open;
-      case "all-limit":
-        return limitedOpen.length ? limitedOpen : open;
-      case "tank": {
-        const tank = ["船耐", "護甲", "抗浪"].filter((a) => open.includes(a));
-        if (priOpen.length) return priOpen;
-        if (tank.length) return tank;
-        return limitedOpen.length ? limitedOpen : open;
+    // 權重：數字愈小愈重；同為 1 則等權 → 都想盡量超限
+    const weightByPri = () => {
+      const w = {};
+      for (const a of targets) w[a] = 1 / getAutoPriority(a);
+      return w;
+    };
+    const weightFocus = (focusAttr) => {
+      const w = weightByPri();
+      for (const a of targets) {
+        w[a] = a === focusAttr ? (w[a] || 1) * 4.5 : (w[a] || 1) * 0.85;
       }
-      default:
-        return priOpen.length ? priOpen : open;
+      return w;
+    };
+    const weightSerial = (order) => {
+      const w = {};
+      order.forEach((a, i) => {
+        w[a] = 1 / (i + 1);
+      });
+      return w;
+    };
+
+    push({
+      id: "sync-burst",
+      name: "同步超限",
+      desc: `依你的優先（${priLabel}）齊頭拉高，盡量超過上限`,
+      mode: "parallel",
+      usePark: false,
+      weights: weightByPri(),
+    });
+
+    push({
+      id: "sync-park",
+      name: "同步穩健",
+      desc: `優先屬性先貼上限前一檔，再一口氣超限（${priLabel}）`,
+      mode: "parallel",
+      usePark: true,
+      weights: weightByPri(),
+    });
+
+    // 同優先或整體：偏重某一軸的組合
+    if (targets.length >= 2) {
+      for (const focus of targets) {
+        push({
+          id: `bias-${focus}`,
+          name: `偏重${focus}`,
+          desc: `在你的優先裡多堆「${focus}」超限，其餘優先仍會顧`,
+          mode: "parallel",
+          usePark: false,
+          weights: weightFocus(focus),
+        });
+      }
     }
+
+    // 依優先數字分層攻頂（1 做完再 2…）
+    push({
+      id: "tier-serial",
+      name: "分層攻頂",
+      desc: "先做完較小優先數字，再往下一層（例：全是1則等同齊頭）",
+      mode: "tier",
+      usePark: false,
+      weights: weightByPri(),
+    });
+
+    // 同層多屬性：排列攻頂順序（2～3 項會展開；更多則取前幾組）
+    const byTier = new Map();
+    for (const a of targets) {
+      const p = getAutoPriority(a);
+      if (!byTier.has(p)) byTier.set(p, []);
+      byTier.get(p).push(a);
+    }
+    let permBudget = 6;
+    for (const [, group] of byTier) {
+      if (group.length < 2 || group.length > 3) continue;
+      const perms = permutations(group);
+      for (const order of perms) {
+        if (permBudget-- <= 0) break;
+        // 本層排列在前，其它優先層維持使用者順序接在後
+        const rest = targets.filter((a) => !group.includes(a));
+        const serialOrder = order.concat(rest);
+        push({
+          id: `order-${serialOrder.join("-")}`,
+          name: `順序 ${order.map((a) => SHORT[a]).join("→")}`,
+          desc: `攻頂順序：${serialOrder.join(" → ")}（盡量超限）`,
+          mode: "serial",
+          usePark: false,
+          order: serialOrder,
+          weights: weightSerial(serialOrder),
+        });
+      }
+    }
+
+    // 整體 serial 依使用者數字（若上面沒產出重複的）
+    if (targets.length >= 2) {
+      push({
+        id: "pri-serial",
+        name: "依優先序",
+        desc: `嚴格 ${targets.map((a) => a + getAutoPriority(a)).join(" → ")}`,
+        mode: "serial",
+        usePark: true,
+        order: targets.slice(),
+        weights: weightSerial(targets),
+      });
+    }
+
+    return strategies;
   }
 
-  function strategyWeight(attr, strategy, totals) {
-    const pri = getAutoPriority(attr);
-    const basePri = pri != null ? 1 / pri : 0.15;
-    const lim = getAttrLimit(attr);
-    const p = totals[attr] || 0;
-    const remain = lim != null ? Math.max(0, lim - p) : 50;
+  /** 本輪主攻：只看使用者優先且未封 */
+  function strategyFocusAttrs(totals, strategy) {
+    const priOpen = enhanceableAttrs(totals)
+      .filter((a) => isAutoAllocTarget(a))
+      .sort((a, b) => getAutoPriority(a) - getAutoPriority(b));
 
-    switch (strategy.id) {
-      case "user-strict":
-      case "user-serial":
-        // 嚴格跟使用者數字：1 遠大於 2、3；沒填優先幾乎忽略
-        return pri != null ? (1 / pri) * 8 : 0.02;
-      case "user-park":
-        return pri != null ? (1 / pri) * 6 : 0.03;
-      case "park":
-      case "burst":
-        return isAutoAllocTarget(attr) ? basePri * 3 : basePri * 0.4;
-      case "balanced":
-        return isAutoAllocTarget(attr) ? 1 : 0.2;
-      case "all-limit":
-        return (
-          (isAutoAllocTarget(attr) ? basePri * 2 : 0.5) * (1 + remain / 100)
-        );
-      case "tank": {
-        const tankBoost =
-          attr === "船耐" ? 2.2 : attr === "護甲" ? 1.8 : attr === "抗浪" ? 1.5 : 1;
-        return (isAutoAllocTarget(attr) ? basePri * 2.5 : 0.35) * tankBoost;
-      }
-      default:
-        return basePri;
+    if (!priOpen.length) return [];
+
+    if (strategy.mode === "serial" && Array.isArray(strategy.order)) {
+      const next = strategy.order.find((a) => priOpen.includes(a));
+      return next ? [next] : [];
     }
+    if (strategy.mode === "tier") {
+      const top = Math.min(...priOpen.map((a) => getAutoPriority(a)));
+      return priOpen.filter((a) => getAutoPriority(a) === top);
+    }
+    // parallel：所有未封的使用者優先
+    return priOpen;
+  }
+
+  function strategyWeight(attr, strategy) {
+    if (!isAutoAllocTarget(attr)) return 0.01;
+    if (strategy.weights && strategy.weights[attr] != null) {
+      return strategy.weights[attr];
+    }
+    return 1 / getAutoPriority(attr);
   }
 
   function scoreFixedFour(partIds, totals, roundsLeft, strategy) {
@@ -241,9 +324,7 @@
     const focus = strategyFocusAttrs(totals, strategy);
     if (!focus.length) return { valid: false, score: -1, cap };
 
-    // 激進決勝、依序攻頂決勝段：不堆疊控管
-    const usePark =
-      strategy.id !== "burst" && strategy.id !== "user-strict";
+    const usePark = !!strategy.usePark;
     let score = 0;
     let valid = true;
 
@@ -251,7 +332,7 @@
       const P = totals[a] || 0;
       const L = getAttrLimit(a);
       const C = cap[a] || 0;
-      const w = strategyWeight(a, strategy, totals);
+      const w = strategyWeight(a, strategy);
       if (L == null) {
         score += C * w * 50;
         continue;
@@ -266,22 +347,16 @@
         score += C * w * 100;
         score += (C / Math.max(roomUnder, 1)) * w * 40;
       } else {
+        // 激進：最大化加成與超限幅度
         score += C * w * 250;
-        if (P + C >= L) score += (P + C - L) * w * 20;
+        if (P + C >= L) score += (P + C - L + 1) * w * 35;
       }
     }
 
-    // 使用者優先類：懲罰非優先屬性的順便成長（趕路排槳不想亂堆船耐等）
-    if (isUserPriorityStrategy(strategy)) {
-      for (const a of enhanceableAttrs(totals)) {
-        if (focus.includes(a) || isAutoAllocTarget(a)) continue;
-        score -= (cap[a] || 0) * 12;
-      }
-    } else {
-      for (const a of enhanceableAttrs(totals)) {
-        if (focus.includes(a)) continue;
-        score += (cap[a] || 0) * strategyWeight(a, strategy, totals) * 8;
-      }
+    // 懲罰非優先順便成長
+    for (const a of enhanceableAttrs(totals)) {
+      if (isAutoAllocTarget(a)) continue;
+      score -= (cap[a] || 0) * 14;
     }
     return { valid, score, cap };
   }
@@ -312,7 +387,11 @@
             }
             let fb = 0;
             for (const a of focus) {
-              fb += (cap[a] || 0) * strategyWeight(a, strategy, totals);
+              fb += (cap[a] || 0) * strategyWeight(a, strategy);
+            }
+            // 後備也略懲罰非優先
+            for (const a of ATTRS) {
+              if (!isAutoAllocTarget(a)) fb -= (cap[a] || 0) * 0.15;
             }
             if (fb > fallbackScore) {
               fallbackScore = fb;
@@ -325,66 +404,18 @@
     return best || fallback;
   }
 
-  const AUTO_STRATEGIES = [
-    {
-      id: "user-park",
-      name: "★ 我的優先（穩健）",
-      desc: "只聽你填的優先（例：帆1／槳2／抗浪3）。先貼上限前一檔再超限；其它屬性能少就少",
-    },
-    {
-      id: "user-strict",
-      name: "★ 我的優先（激進）",
-      desc: "嚴格照優先數字衝高（1≫2≫3），盡早超限決勝；不重要的屬性盡量不帶",
-    },
-    {
-      id: "user-serial",
-      name: "★ 依序攻頂",
-      desc: "先做完優先 1（如雙帆），再做 2（槳），再做 3（抗浪），適合純趕路排槳",
-    },
-    {
-      id: "park",
-      name: "穩健堆疊",
-      desc: "優先為主，做完後剩餘次數再補其它未封上限",
-    },
-    {
-      id: "burst",
-      name: "激進決勝",
-      desc: "每輪最大化優先屬性加成，較早超限拉開差距",
-    },
-    {
-      id: "balanced",
-      name: "優先均衡",
-      desc: "有填優先的屬性盡量齊頭並進，避免單一屬性吃光輪次",
-    },
-    {
-      id: "all-limit",
-      name: "全上限兼顧",
-      desc: "所有有設上限且未封的屬性一併納入，優先仍略重",
-    },
-    {
-      id: "tank",
-      name: "生存向",
-      desc: "優先後偏重船耐／護甲／抗浪，偏坦度配置",
-    },
-  ];
-
   /**
    * 模擬一組策略 → 完整輪次與最終總值。
-   * 規則：只有「該屬性」達/超上限才停該屬性；其它照強，盡量用光次數。
+   * 只服務使用者優先；單一屬性達/超上限則該屬性停，其餘優先繼續。
    */
   function simulateAutoPlan(strategy, maxR) {
     let totals = Object.fromEntries(ATTRS.map((a) => [a, 0]));
     const planRounds = [];
-    const userOnly = isUserPriorityStrategy(strategy);
 
     for (let r = 0; r < maxR; r++) {
       const roundsLeft = maxR - r;
-      const open = enhanceableAttrs(totals);
-      if (!open.length) break;
-
-      // 使用者優先類：你的優先都封了就停，不拿次數去堆不重要的屬性
       const focus = strategyFocusAttrs(totals, strategy);
-      if (userOnly && !focus.length) break;
+      if (!focus.length) break;
 
       const chosen = pickBestFourParts(totals, roundsLeft, strategy);
       if (!chosen || chosen.length !== SLOTS) break;
@@ -395,7 +426,6 @@
       const delta = Object.fromEntries(ATTRS.map((a) => [a, 0]));
 
       for (const a of ATTRS) {
-        // 僅略過已達/超上限的屬性；零件加成仍會寫入未封屬性（與零件一致）
         if (!canEnhanceAttr(totals[a] || 0, a)) {
           delta[a] = 0;
         } else {
@@ -404,13 +434,7 @@
         totals[a] = (totals[a] || 0) + delta[a];
       }
 
-      // 使用者優先：至少要有一項「主攻優先」有增量，否則無意義
-      if (userOnly) {
-        const focusGain = focus.some((a) => (delta[a] || 0) > 0);
-        if (!focusGain) break;
-      } else if (!ATTRS.some((a) => (delta[a] || 0) > 0)) {
-        break;
-      }
+      if (!focus.some((a) => (delta[a] || 0) > 0)) break;
 
       if (cumulativeMode) {
         round.values = { ...totals };
@@ -499,16 +523,14 @@
     const list = $("#autoPlanList");
     if (!list) return;
     const shape = isPureSailProfile() ? "六邊形（純帆）" : "七邊形";
-    const priHint = ATTRS.filter((a) => isAutoAllocTarget(a))
-      .sort((a, b) => getAutoPriority(a) - getAutoPriority(b))
+    const priHint = userPriorityAttrs()
       .map((a) => `${a}${getAutoPriority(a)}`)
       .join("／");
 
     list.innerHTML = plans
       .map((plan, idx) => {
         const s = plan.strategy;
-        const starred = s.name.startsWith("★") ? " plan-user" : "";
-        return `<button type="button" class="auto-plan-card${starred}" data-plan-idx="${idx}">
+        return `<button type="button" class="auto-plan-card plan-user" data-plan-idx="${idx}">
           <h4>${escapeAttr(s.name)}</h4>
           <p class="plan-desc">${escapeAttr(s.desc)}</p>
           ${buildRadarSvg(plan.totals)}
@@ -520,9 +542,9 @@
 
     const intro = document.querySelector(".auto-plan-intro");
     if (intro) {
-      intro.textContent = `雷達為${shape}（相對上限；紅字＝已達上限）。你的優先：${
-        priHint || "（未設定）"
-      }。★開頭方案只衝你的優先（適合趕路排槳）。點選後回填主表。`;
+      intro.textContent = `全部依你的優先產生組合（目前：${
+        priHint || "未設定"
+      }）。同填 1＝都想盡量超限。雷達${shape}；紅字軸＝已達上限。點選後回填主表。`;
     }
 
     openModal("autoPlanModal");
@@ -567,23 +589,33 @@
       return;
     }
 
-    toast("正在計算多組方案…");
+    toast("正在依你的優先計算組合方案…");
 
-    // 讓 toast 先畫出來
     setTimeout(() => {
+      const strategies = buildUserPriorityStrategies();
       const plans = [];
       const seen = new Set();
-      for (const strategy of AUTO_STRATEGIES) {
+      for (const strategy of strategies) {
         const plan = simulateAutoPlan(strategy, maxR);
         if (!plan.rounds.length) continue;
         if (plan.rounds.some((r) => !isPartsComplete(r))) continue;
-        const sig = plan.rounds
-          .map((r) => r.parts.join("-") + ":" + ATTRS.map((a) => r.values[a]).join(","))
-          .join("|");
+        // 用最終總值簽名去重（不同順序若結果相同只留一個）
+        const sig = ATTRS.map((a) => plan.totals[a] || 0).join(",");
         if (seen.has(sig)) continue;
         seen.add(sig);
         plans.push(plan);
       }
+
+      // 超限總幅度高的排前面，方便選「越高越好」
+      plans.sort((p, q) => {
+        const over = (t) =>
+          userPriorityAttrs().reduce((s, a) => {
+            const lim = getAttrLimit(a);
+            const v = t[a] || 0;
+            return s + (lim != null && v > lim ? v - lim : v);
+          }, 0);
+        return over(q.totals) - over(p.totals);
+      });
 
       if (!plans.length) {
         toast("無法自動配置：請檢查上限、優先與零件資料");
