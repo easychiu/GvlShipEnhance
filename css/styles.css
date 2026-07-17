@@ -685,6 +685,70 @@ button:active {
   line-height: 1.45;
 }
 
+.footer-actions {
+  margin-top: 12px;
+}
+
+.footer-actions button {
+  min-width: 120px;
+}
+
+.changelog-note {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.changelog-note code {
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--soft-bg);
+  border: 1px solid var(--border);
+}
+
+.changelog-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: min(55vh, 480px);
+  overflow: auto;
+}
+
+.changelog-list li {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 10px 14px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.changelog-list li:first-child {
+  padding-top: 0;
+}
+
+.changelog-list time {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--primary);
+  font-size: 12px;
+}
+
+.changelog-list strong {
+  color: var(--text);
+}
+
+@media (max-width: 560px) {
+  .changelog-list li {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
 .auto-mode-hint {
   margin: 0 0 14px;
   font-size: 13px;

@@ -1720,6 +1720,16 @@
 
     $("#helpGuideBtn").addEventListener("click", () => openModal("helpModal"));
     $("#helpClose").addEventListener("click", () => closeModal("helpModal"));
+
+    $("#changelogBtn")?.addEventListener("click", () =>
+      openModal("changelogModal")
+    );
+    $("#changelogClose")?.addEventListener("click", () =>
+      closeModal("changelogModal")
+    );
+    $("#changelogOk")?.addEventListener("click", () =>
+      closeModal("changelogModal")
+    );
     $("#helpOk").addEventListener("click", () => {
       localStorage.setItem(HELP_KEY, "1");
       closeModal("helpModal");

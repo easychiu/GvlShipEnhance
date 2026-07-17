@@ -177,12 +177,108 @@
             （原作者：安屠生•终）
           </p>
           <p>方案預設僅存於你的瀏覽器本機，不會上傳到伺服器。</p>
+          <p class="footer-actions">
+            <button type="button" class="btn-blue" id="changelogBtn">
+              📋 更新日誌
+            </button>
+          </p>
         </footer>
       </div>
     </div>
 
     <div id="float-summary">
       <div id="float-summary-content"></div>
+    </div>
+
+    <!-- 更新日誌：新條目請加在 #changelogList 最上方 -->
+    <div class="modal" id="changelogModal">
+      <div class="modal-card modal-card-wide">
+        <div class="modal-head">
+          <h3>📋 更新日誌</h3>
+          <button
+            type="button"
+            class="icon-btn"
+            id="changelogClose"
+            aria-label="關閉"
+          >
+            ×
+          </button>
+        </div>
+        <p class="changelog-note">
+          由新到舊排列。維護：在下方列表<strong>最上方</strong>新增
+          <code>&lt;li&gt;</code> 即可。
+        </p>
+        <ul class="changelog-list" id="changelogList">
+          <li>
+            <time datetime="2026-07-17">2026-07-17</time>
+            <div>
+              <strong>優先一鍵推薦</strong>
+              彙總區新增「商／冒險」（橫帆·縱帆·抗浪 1）與「戰」（轉向·護甲·船耐
+              1）按鈕。
+            </div>
+          </li>
+          <li>
+            <time datetime="2026-07-16">2026-07-16</time>
+            <div>
+              <strong>自動配：從頭／接著配</strong>
+              可保留既有輪次，依剩餘次數與優先繼續規劃。
+            </div>
+          </li>
+          <li>
+            <time datetime="2026-07-16">2026-07-16</time>
+            <div>
+              <strong>未選滿零件保留素質</strong>
+              零件未滿 4 個時不覆寫、不隱藏原有強化數值。
+            </div>
+          </li>
+          <li>
+            <time datetime="2026-07-16">2026-07-16</time>
+            <div>
+              <strong>自動配理論最高與單軸最大決勝</strong>
+              顯示各優先天花板；決勝輪全搜尋最大 4 件加成；★
+              最高Ｘ專攻方案。
+            </div>
+          </li>
+          <li>
+            <time datetime="2026-07-16">2026-07-16</time>
+            <div>
+              <strong>外觀主題</strong>
+              支援跟隨系統／淺色／深色（頁面右上選擇，會記住）。
+            </div>
+          </li>
+          <li>
+            <time datetime="2026-07-16">2026-07-16</time>
+            <div>
+              <strong>純帆無槳</strong>
+              純帆船隱藏槳力與槳類零件；雷達改六邊形。
+            </div>
+          </li>
+          <li>
+            <time datetime="2026-07-16">2026-07-16</time>
+            <div>
+              <strong>自動配多方案＋雷達圖</strong>
+              只依使用者優先產生組合，選方案後回填；僅已達上限的屬性不可再強。
+            </div>
+          </li>
+          <li>
+            <time datetime="2026-07-16">2026-07-16</time>
+            <div>
+              <strong>強化規則與基礎自動配</strong>
+              同輪零件不重複、每輪須 4 件、強化次數上限、船隻上限套用、優先留白不列入。
+            </div>
+          </li>
+          <li>
+            <time datetime="2026-07-16">2026-07-16</time>
+            <div>
+              <strong>初版上線</strong>
+              繁中船隻強化模擬器，GitHub Pages 靜態部署。
+            </div>
+          </li>
+        </ul>
+        <div class="modal-actions">
+          <button type="button" class="btn-blue" id="changelogOk">關閉</button>
+        </div>
+      </div>
     </div>
 
     <!-- 使用說明 -->
@@ -254,6 +350,10 @@
           <p>
             <strong>15. 外觀主題：</strong>
             頁面右上可選「跟隨系統／淺色／深色」，會記住你的選擇。
+          </p>
+          <p>
+            <strong>16. 更新日誌：</strong>
+            頁面底部「更新日誌」按鈕可查看歷史更新（預設不展開）。
           </p>
         </div>
         <div class="modal-actions">
