@@ -516,6 +516,24 @@ button:active {
   padding: 5px 8px;
 }
 
+.priority-presets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.priority-presets .preset-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.priority-presets button {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 .hint-inline {
   flex: 1 1 220px;
   font-size: 12px;

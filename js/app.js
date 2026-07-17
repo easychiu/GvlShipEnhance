@@ -1627,6 +1627,36 @@
       renderRounds();
     });
 
+    /** 一鍵優先推薦：清空後套用指定優先（皆為 1＝同等最優先） */
+    function applyPriorityPreset(map, label) {
+      attrPriority = Object.fromEntries(ATTRS.map((a) => [a, ""]));
+      for (const [a, p] of Object.entries(map)) {
+        if (ATTRS.includes(a)) attrPriority[a] = p;
+      }
+      // 純帆時不寫入槳力優先
+      if (isPureSailProfile()) attrPriority["槳力"] = "";
+      renderAll();
+      const used = ATTRS.filter((a) => attrPriority[a] !== "")
+        .map((a) => `${a}${attrPriority[a]}`)
+        .join("·");
+      toast(`${label}：${used || "（無）"}`);
+    }
+
+    $("#priPresetTrade")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      applyPriorityPreset(
+        { 橫帆: 1, 縱帆: 1, 抗浪: 1 },
+        "商／冒險優先"
+      );
+    });
+    $("#priPresetCombat")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      applyPriorityPreset(
+        { 轉向: 1, 護甲: 1, 船耐: 1 },
+        "戰優先"
+      );
+    });
+
     $("#shipLimitSelector")?.addEventListener("change", (e) => {
       const key = e.target.value;
       if (!key) {
@@ -1707,6 +1737,7 @@
       if (e.target.closest(".limit-input")) return;
       if (e.target.closest(".priority-input")) return;
       if (e.target.closest(".auto-alloc-bar")) return;
+      if (e.target.closest(".priority-presets")) return;
       if (e.target.closest("select")) return;
       if (e.target.closest(".summary-label")) return;
       if (e.target.closest("button")) return;

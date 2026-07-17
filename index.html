@@ -122,13 +122,32 @@
                 title="船隻可強化的總輪次數"
               />
             </label>
+            <div class="priority-presets" title="一鍵填入優先（其餘清空）">
+              <span class="preset-label">優先推薦</span>
+              <button
+                type="button"
+                class="btn-blue"
+                id="priPresetTrade"
+                title="橫帆1 · 縱帆1 · 抗浪1"
+              >
+                商／冒險
+              </button>
+              <button
+                type="button"
+                class="btn-orange"
+                id="priPresetCombat"
+                title="轉向1 · 護甲1 · 船耐1"
+              >
+                戰
+              </button>
+            </div>
             <span class="hint-inline"
               >每輪 4 零件。自動配只依你填的優先產生多組組合（雷達圖），選一個回填即可。</span
             >
           </div>
           <div id="summary" class="summary-list"></div>
           <p class="empty-hint" style="padding-top: 4px; font-size: 12px">
-            提示：點擊本區塊可開關右下角懸浮彙總窗；點屬性名可篩選零件。上限右側「優先」數字愈小愈優先（1 最高）；留白則不列入自動配。
+            提示：點擊本區塊可開關右下角懸浮彙總窗；點屬性名可篩選零件。上限右側「優先」數字愈小愈優先（1 最高）；留白則不列入自動配。「商／冒險」=帆·浪1，「戰」=轉·甲·耐1。
           </p>
         </section>
 
