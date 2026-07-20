@@ -1708,6 +1708,7 @@
     });
 
     $("#exportBtn").addEventListener("click", exportConfig);
+    $("#exportImageBtn")?.addEventListener("click", exportResultImage);
     $("#importBtn").addEventListener("click", () => $("#importFile").click());
     $("#importFile").addEventListener("change", importConfig);
 
@@ -1964,6 +1965,249 @@
     a.click();
     URL.revokeObjectURL(a.href);
     toast("已匯出設定");
+  }
+
+  function partDisplayName(partId) {
+    if (partId === "" || partId == null) return "（未選）";
+    const p = PARTS[String(partId)];
+    return p ? p.name : `零件#${partId}`;
+  }
+
+  function shipLabelForExport() {
+    if (!selectedShipKey) return "未指定船隻";
+    const ship = findShipByKey(selectedShipKey);
+    if (!ship) return selectedShipKey;
+    const pure = ship.pureSail || ship.limits?.槳力 === 0 ? " · 純帆" : "";
+    return `Lv.${ship.lv} ${ship.name}${pure}`;
+  }
+
+  /**
+   * 將目前配置繪製成 PNG（含各輪強化材料、數值與最終彙總）
+   */
+  function exportResultImage() {
+    if (!rounds.length) {
+      toast("尚無強化輪次可匯出");
+      return;
+    }
+
+    const pad = 28;
+    const width = 920;
+    const lineH = 22;
+    const titleH = 36;
+    const sectionGap = 16;
+    const roundBlockBase = 28 + lineH * 2; // head + materials row estimate
+    const attrs = uiAttrs();
+    const total = grandTotal();
+
+    // 預估高度
+    let height = pad * 2 + titleH + 80; // header
+    height += 28 + Math.ceil(attrs.length / 2) * lineH + sectionGap; // summary
+    for (let ri = 0; ri < rounds.length; ri++) {
+      const r = rounds[ri];
+      const partNames = r.parts.map(partDisplayName);
+      // 材料可能換行：粗估每 2 個材料一行
+      const matLines = Math.max(1, Math.ceil(partNames.length / 2));
+      const valLine = 1;
+      const noteLine = r.note ? 1 : 0;
+      height += 18 + matLines * lineH + valLine * lineH + noteLine * lineH + 14;
+    }
+    height += 40; // footer
+
+    const canvas = document.createElement("canvas");
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+
+    // 背景：固定淺色，方便分享閱讀
+    const bg = "#f4faf6";
+    const panel = "#ffffff";
+    const text = "#1f2d3d";
+    const muted = "#6b7c8a";
+    const primary = "#2b6cb0";
+    const border = "#d5e0e6";
+
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, width, height);
+
+    let y = pad;
+
+    // 標題卡
+    roundRect(ctx, pad, y, width - pad * 2, 72, 12);
+    ctx.fillStyle = panel;
+    ctx.fill();
+    ctx.strokeStyle = border;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.fillStyle = text;
+    ctx.font = "bold 22px Microsoft JhengHei, Noto Sans TC, sans-serif";
+    ctx.fillText("大航海傳說 · 船隻強化方案", pad + 18, y + 32);
+    ctx.font = "14px Microsoft JhengHei, Noto Sans TC, sans-serif";
+    ctx.fillStyle = muted;
+    const meta = `${shipLabelForExport()}  ·  ${rounds.length} 輪  ·  ${
+      cumulativeMode ? "累計模式" : "拆分模式"
+    }  ·  ${new Date().toLocaleString()}`;
+    ctx.fillText(meta, pad + 18, y + 56);
+    y += 72 + sectionGap;
+
+    // 最終屬性
+    const sumH = 24 + Math.ceil(attrs.length / 2) * lineH + 12;
+    roundRect(ctx, pad, y, width - pad * 2, sumH, 12);
+    ctx.fillStyle = panel;
+    ctx.fill();
+    ctx.strokeStyle = border;
+    ctx.stroke();
+
+    ctx.fillStyle = primary;
+    ctx.font = "bold 15px Microsoft JhengHei, Noto Sans TC, sans-serif";
+    ctx.fillText("最終屬性彙總", pad + 18, y + 22);
+
+    ctx.font = "14px Microsoft JhengHei, Noto Sans TC, sans-serif";
+    const colW = (width - pad * 2 - 36) / 2;
+    attrs.forEach((a, i) => {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const x = pad + 18 + col * colW;
+      const yy = y + 44 + row * lineH;
+      const val = total[a] || 0;
+      const lim = getAttrLimit(a);
+      const limTxt = lim != null ? ` / 上限 ${lim}` : "";
+      const over = lim != null && val > lim;
+      ctx.fillStyle = COLORS[a] || text;
+      ctx.fillRect(x, yy - 10, 8, 8);
+      ctx.fillStyle = over ? "#c92a2a" : text;
+      ctx.fillText(`${a}  ${val}${limTxt}${over ? " 超限" : ""}`, x + 14, yy);
+    });
+    y += sumH + sectionGap;
+
+    // 各輪：必須含強化材料
+    rounds.forEach((r, ri) => {
+      const partNames = r.parts.map(partDisplayName);
+      const matChunks = [];
+      for (let i = 0; i < partNames.length; i += 2) {
+        matChunks.push(
+          partNames
+            .slice(i, i + 2)
+            .map((n, j) => `${i + j + 1}.${n}`)
+            .join("    ")
+        );
+      }
+      if (!matChunks.length) matChunks.push("（無材料）");
+
+      const delta = roundDelta(ri);
+      const endVals = totalsAtRound(ri);
+      const valParts = attrs
+        .map((a) => {
+          const d = delta[a] || 0;
+          const t = endVals[a] || 0;
+          if (!d && !t) return null;
+          return `${SHORT[a]}${d ? (d > 0 ? "+" : "") + d : "0"}→${t}`;
+        })
+        .filter(Boolean);
+      const valLine =
+        valParts.length > 0 ? valParts.join("  ") : "（無數值）";
+      const noteLine = r.note ? `備註：${r.note}` : "";
+
+      const blockH =
+        20 +
+        lineH + // 標題
+        matChunks.length * lineH +
+        lineH + // 數值
+        (noteLine ? lineH : 0) +
+        12;
+
+      roundRect(ctx, pad, y, width - pad * 2, blockH, 12);
+      ctx.fillStyle = panel;
+      ctx.fill();
+      ctx.strokeStyle = border;
+      ctx.stroke();
+
+      let yy = y + 22;
+      ctx.fillStyle = primary;
+      ctx.font = "bold 15px Microsoft JhengHei, Noto Sans TC, sans-serif";
+      ctx.fillText(`強化 ${ri + 1}`, pad + 18, yy);
+
+      ctx.font = "13px Microsoft JhengHei, Noto Sans TC, sans-serif";
+      ctx.fillStyle = text;
+      yy += lineH;
+      ctx.fillStyle = muted;
+      ctx.fillText("強化材料", pad + 18, yy);
+      ctx.fillStyle = text;
+      matChunks.forEach((line) => {
+        yy += lineH;
+        // 截斷過長
+        const maxW = width - pad * 2 - 36;
+        let draw = line;
+        while (ctx.measureText(draw).width > maxW && draw.length > 4) {
+          draw = draw.slice(0, -2);
+        }
+        if (draw !== line) draw += "…";
+        ctx.fillText(draw, pad + 18, yy);
+      });
+
+      yy += lineH;
+      ctx.fillStyle = muted;
+      const vLabel = "本輪／累計 ";
+      ctx.fillText(vLabel, pad + 18, yy);
+      const vStart = pad + 18 + ctx.measureText(vLabel).width;
+      ctx.fillStyle = text;
+      let vDraw = valLine;
+      const maxVW = width - pad * 2 - 36 - ctx.measureText(vLabel).width;
+      while (ctx.measureText(vDraw).width > maxVW && vDraw.length > 4) {
+        vDraw = vDraw.slice(0, -2);
+      }
+      if (vDraw !== valLine) vDraw += "…";
+      ctx.fillText(vDraw, vStart, yy);
+
+      if (noteLine) {
+        yy += lineH;
+        ctx.fillStyle = muted;
+        let nDraw = noteLine;
+        const maxNW = width - pad * 2 - 36;
+        while (ctx.measureText(nDraw).width > maxNW && nDraw.length > 4) {
+          nDraw = nDraw.slice(0, -2);
+        }
+        if (nDraw !== noteLine) nDraw += "…";
+        ctx.fillText(nDraw, pad + 18, yy);
+      }
+
+      y += blockH + 10;
+    });
+
+    // footer
+    ctx.fillStyle = muted;
+    ctx.font = "12px Microsoft JhengHei, Noto Sans TC, sans-serif";
+    ctx.fillText(
+      "GvlShipEnhance · 結果圖含強化材料與屬性 · 僅供方案參考",
+      pad,
+      height - 16
+    );
+
+    try {
+      const url = canvas.toDataURL("image/png");
+      const a = document.createElement("a");
+      const ship = shipLabelForExport().replace(/[\\/:*?"<>|]/g, "_");
+      a.href = url;
+      a.download = `船隻強化_${ship}_${Date.now()}.png`;
+      a.click();
+      toast("已匯出結果圖片（含各輪材料）");
+    } catch (err) {
+      console.error(err);
+      toast("匯出圖片失敗");
+    }
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
   }
 
   function importConfig(e) {
