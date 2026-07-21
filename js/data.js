@@ -168,6 +168,7 @@ window.GAME_DATA = {
         name: "東印度武裝商船",
         // 105/105/35/30/25/900 → 橫/縱/轉/浪/甲/耐（未給槳，暫 0）
         pureSail: true,
+        enhanceCount: 6,
         limits: {
           橫帆: 105,
           縱帆: 105,
