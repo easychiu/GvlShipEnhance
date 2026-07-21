@@ -1241,13 +1241,21 @@
           : "",
       ])
     );
+    // 船隻預設強化次數（如 110 船 6 次）
+    if (ship.enhanceCount != null && Number(ship.enhanceCount) > 0) {
+      maxEnhanceCount = String(ship.enhanceCount);
+    }
     // 純帆：清槳零件／槳優先，介面不出現槳可選
     if (isPureSailProfile()) stripPaddleForPureSail();
     renderAll();
     syncShipLimitSelector();
     if (!silent) {
       const pure = ship.pureSail || ship.limits.槳力 === 0 ? "（純帆·無槳可選）" : "";
-      toast(`已套用 Lv.${ship.lv} ${ship.name} 強化上限${pure}`);
+      const times =
+        ship.enhanceCount != null && Number(ship.enhanceCount) > 0
+          ? ` · 強化${ship.enhanceCount}次`
+          : "";
+      toast(`已套用 Lv.${ship.lv} ${ship.name} 屬性上限${times}${pure}`);
     }
     return true;
   }
@@ -1258,8 +1266,12 @@
     const opts = shipsWithLimits()
       .map((s) => {
         const pure = s.pureSail || s.limits?.槳力 === 0 ? " · 純帆" : "";
+        const times =
+          s.enhanceCount != null && Number(s.enhanceCount) > 0
+            ? ` · ${s.enhanceCount}次`
+            : "";
         const icon = D.typeIcons[s.type] || "";
-        return `<option value="${escapeAttr(s.key)}">${icon} Lv.${s.lv} ${escapeAttr(s.name)}${pure}</option>`;
+        return `<option value="${escapeAttr(s.key)}">${icon} Lv.${s.lv} ${escapeAttr(s.name)}${times}${pure}</option>`;
       })
       .join("");
     sel.innerHTML = `<option value="">— 手動填寫 —</option>${opts}`;

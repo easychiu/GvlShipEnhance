@@ -125,6 +125,7 @@ window.GAME_DATA = {
       {
         lv: 110,
         name: "威尼斯槳帆戰艦",
+        enhanceCount: 6,
         limits: { 橫帆: 85, 縱帆: 85, 槳力: 40, 轉向: 22, 抗浪: 30, 護甲: 25, 船耐: 900 },
       },
       { lv: 100, name: "巨型槳帆戰艦" },
@@ -138,6 +139,7 @@ window.GAME_DATA = {
         lv: 110,
         name: "裝甲戰列艦",
         pureSail: true,
+        enhanceCount: 6,
         limits: { 橫帆: 105, 縱帆: 105, 槳力: 0, 轉向: 40, 抗浪: 42, 護甲: 25, 船耐: 900 },
       },
       { lv: 100, name: "戰列艦" },
@@ -151,6 +153,7 @@ window.GAME_DATA = {
         lv: 110,
         name: "大型高速帆船",
         pureSail: true,
+        enhanceCount: 6,
         limits: { 橫帆: 120, 縱帆: 120, 槳力: 0, 轉向: 36, 抗浪: 44, 護甲: 25, 船耐: 900 },
       },
       { lv: 100, name: "大型阿拉伯巡航船" },
