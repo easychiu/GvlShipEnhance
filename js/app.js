@@ -467,10 +467,14 @@
       if (!focus.length) return null;
       let bestIds = null;
       let bestScore = -Infinity;
+      let bestFocusGain = 0;
       forEachFourCombo((ids, cap) => {
         let s = 0;
+        let focusGain = 0;
         for (const a of focus) {
           const C = cap[a] || 0;
+          if (C <= 0) continue;
+          focusGain += C;
           const P = totals[a] || 0;
           const L = getAttrLimit(a);
           const w = 1 / (getAutoPriority(a) || 1);
@@ -478,15 +482,22 @@
           // 本輪能達/超上限者大加分（盡快走完優先）
           if (L != null && P + C >= L) s += (C + (P + C - L)) * w * 250;
         }
+        // 必須對優先有增益，才考慮（避免分數被非優先懲罰打成 0 而整案失敗）
+        if (focusGain <= 0) return;
         for (const a of ATTRS) {
-          if (!isAutoAllocTarget(a)) s -= (cap[a] || 0) * 12;
+          if (!isAutoAllocTarget(a)) s -= (cap[a] || 0) * 3;
         }
-        if (s > bestScore) {
+        if (
+          s > bestScore ||
+          (s === bestScore && focusGain > bestFocusGain)
+        ) {
           bestScore = s;
+          bestFocusGain = focusGain;
           bestIds = ids.slice();
         }
       });
-      return bestScore > 0 ? bestIds : null;
+      // 只要有對優先的增益就回傳，不要求 total score > 0
+      return bestIds;
     };
 
     if (serial) {
@@ -583,8 +594,10 @@
         let seals = 0;
         let progress = 0;
         let waste = 0;
+        let focusGain = 0;
         for (const a of focus) {
           const C = cap[a] || 0;
+          if (C > 0) focusGain += C;
           const P = totals[a] || 0;
           const L = getAttrLimit(a);
           if (L == null) {
@@ -598,15 +611,16 @@
             // 剛好或略超即可，多餘超限不鼓勵（省次數不必極致）
             waste += Math.max(0, C - need);
             progress += need * 10;
-          } else {
+          } else if (C > 0) {
             progress += C * 8;
           }
         }
-        // 非優先加成當浪費
+        if (focusGain <= 0 && seals === 0 && progress === 0) return;
+
+        // 非優先加成當輕微浪費（不可壓過有效進度）
         for (const a of ATTRS) {
-          if (!isAutoAllocTarget(a)) waste += (cap[a] || 0) * 0.5;
+          if (!isAutoAllocTarget(a)) waste += (cap[a] || 0) * 0.2;
         }
-        if (seals === 0 && progress === 0) return;
 
         const key = [seals, progress, -waste];
         const better =
@@ -1261,19 +1275,30 @@
       ? `模式：<b>接著配</b>（已強化 ${ctx.used} 次，再配最多 ${ctx.remaining} 輪）`
       : `模式：<b>從頭配</b>（共 ${maxR} 輪）`;
 
-    list.innerHTML =
-      (peakHtml
-        ? `<div class="peak-summary"><div class="peak-title">各優先·可衝目標${
-            isContinue ? "（從目前數值起算）" : "（單軸理論最高）"
-          }</div><div class="peak-body">${peakHtml}</div><div class="peak-hint">「★ 最高Ｘ」專攻該軸；接著配會保留你已有的輪次再往後加。</div></div>`
-        : "") +
-      plans
-        .map((plan, idx) => {
-          const s = plan.strategy;
-          const roundLabel = isContinue
-            ? `新増 ${plan.roundCount} 輪（接在已有 ${ctx.used} 輪後）`
-            : `輪次 <b>${plan.roundCount}</b>／${maxR}`;
-          return `<button type="button" class="auto-plan-card plan-user" data-plan-idx="${idx}">
+    const stopPlans = plans.filter(
+      (p) =>
+        p.strategy.mode === "priority-stop-min" ||
+        p.strategy.mode === "priority-stop"
+    );
+    const otherPlans = plans.filter(
+      (p) =>
+        p.strategy.mode !== "priority-stop-min" &&
+        p.strategy.mode !== "priority-stop"
+    );
+    // 列表順序：超限即停系列 → 其他（與 pendingAutoPlans 索引一致需重排）
+    const ordered = stopPlans.concat(otherPlans);
+    pendingAutoPlans = ordered;
+
+    const cardHtml = (plan, idx) => {
+      const s = plan.strategy;
+      const isStop =
+        s.mode === "priority-stop-min" || s.mode === "priority-stop";
+      const roundLabel = isContinue
+        ? `新增 ${plan.roundCount} 輪（接在已有 ${ctx.used} 輪後）`
+        : `輪次 <b>${plan.roundCount}</b>／${maxR}`;
+      return `<button type="button" class="auto-plan-card plan-user${
+        isStop ? " plan-stop" : ""
+      }" data-plan-idx="${idx}">
           <h4>${escapeAttr(s.name)}</h4>
           <p class="plan-desc">${escapeAttr(s.desc)}</p>
           ${buildRadarSvg(plan.totals)}
@@ -1283,8 +1308,18 @@
           )}
           <span class="plan-pick btn-primary" style="display:block;padding:6px 8px;border-radius:8px;font-size:13px">選擇此方案</span>
         </button>`;
-        })
-        .join("");
+    };
+
+    list.innerHTML =
+      (peakHtml
+        ? `<div class="peak-summary"><div class="peak-title">各優先·可衝目標${
+            isContinue ? "（從目前數值起算）" : "（單軸理論最高）"
+          }</div><div class="peak-body">${peakHtml}</div><div class="peak-hint">「★ 最高Ｘ」專攻該軸；「★ 優先超限即停／最省次數」全優先達上限就停。</div></div>`
+        : "") +
+      (stopPlans.length
+        ? `<div class="plan-section-label">超限即停（優先全過上限就停）</div>`
+        : "") +
+      ordered.map((p, i) => cardHtml(p, i)).join("");
 
     const intro = document.querySelector(".auto-plan-intro");
     if (intro) {
@@ -1391,16 +1426,42 @@
       const plans = [];
       const seen = new Set();
       for (const strategy of strategies) {
-        const plan = simulateAutoPlan(strategy, maxR, opts);
-        if (!plan.rounds.length) continue;
+        let plan;
+        try {
+          plan = simulateAutoPlan(strategy, maxR, opts);
+        } catch (err) {
+          console.error("simulateAutoPlan", strategy.id, err);
+          continue;
+        }
+        if (!plan || !plan.rounds.length) continue;
         if (plan.rounds.some((r) => !isPartsComplete(r))) continue;
-        const sig = ATTRS.map((a) => plan.totals[a] || 0).join(",");
+        // 去重：同策略 id 保留；不同策略即使總值相同也保留（避免超限即停被吃掉）
+        const sig =
+          strategy.id +
+          "|" +
+          ATTRS.map((a) => plan.totals[a] || 0).join(",") +
+          "|r" +
+          plan.roundCount;
         if (seen.has(sig)) continue;
         seen.add(sig);
         plans.push(plan);
       }
 
+      // 固定把「超限即停」系列排在最前，方便找到
+      const stopRank = (p) => {
+        const m = p.strategy.mode;
+        if (m === "priority-stop-min") return 0;
+        if (m === "priority-stop") return 1;
+        if (m === "proven") return 2;
+        return 3;
+      };
       plans.sort((p, q) => {
+        const rd = stopRank(p) - stopRank(q);
+        if (rd !== 0) return rd;
+        // 同系列：輪數少優先（省次數），再比超限合計
+        if (p.roundCount !== q.roundCount && stopRank(p) <= 1) {
+          return p.roundCount - q.roundCount;
+        }
         const over = (plan) => {
           let s = 0;
           for (const a of userPriorityAttrs()) {
@@ -1408,15 +1469,6 @@
             const v = plan.totals[a] || 0;
             if (lim != null && v > lim) s += v - lim;
           }
-          // 最省次數加權最高；一般超限即停次之；proven 再次
-          if (plan.strategy.mode === "priority-stop-min") {
-            s += 2;
-            s += Math.max(0, 30 - plan.roundCount) * 0.05;
-          } else if (plan.strategy.mode === "priority-stop") {
-            s += 1;
-            s += Math.max(0, 20 - plan.roundCount) * 0.01;
-          } else if (plan.strategy.mode === "proven") s += 0.5;
-          else if (plan.strategy.maximizeOvershoot) s += 0.01;
           return s;
         };
         return over(q) - over(p);

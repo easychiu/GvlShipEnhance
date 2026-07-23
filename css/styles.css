@@ -882,6 +882,20 @@ button:active {
   color: var(--plan-user-title);
 }
 
+.auto-plan-card.plan-stop {
+  border-color: var(--success);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--success) 35%, transparent);
+}
+
+.plan-section-label {
+  grid-column: 1 / -1;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--success);
+  margin: 4px 0 0;
+  padding: 4px 2px;
+}
+
 /* ---- float panel ---- */
 #float-summary {
   position: fixed;
