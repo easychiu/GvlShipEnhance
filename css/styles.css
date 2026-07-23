@@ -1225,3 +1225,96 @@ button:active {
   margin: 4px 0 0;
 }
 
+/* ===== 自動配入口強化與一鍵引導 ===== */
+
+/* 自動配主按鈕：加大加粗，未使用過時脈動吸引注意 */
+#autoAllocBtn {
+  font-size: 15px;
+  font-weight: 800;
+  padding: 9px 18px;
+  border-radius: 10px;
+}
+
+#autoAllocBtn:not(.auto-used) {
+  animation: auto-pulse 2s ease-in-out infinite;
+}
+
+@keyframes auto-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 55%, transparent);
+  }
+  55% {
+    box-shadow: 0 0 0 9px transparent;
+  }
+}
+
+/* 快速開始引導條（無進度時顯示） */
+.quick-start {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 12px;
+  padding: 10px 14px;
+  border: 1px dashed var(--primary);
+  border-radius: 12px;
+  background: var(--primary-soft);
+}
+
+.quick-start .qs-title {
+  font-weight: 800;
+  color: var(--plan-user-title);
+}
+
+.quick-start .qs-text {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.quick-start .qs-sub {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#quickAutoBtn {
+  font-size: 15px;
+  font-weight: 800;
+  padding: 9px 18px;
+  border-radius: 10px;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+#quickAutoBtn:hover {
+  filter: brightness(1.08);
+}
+
+.quick-start .qs-dismiss {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 6px;
+}
+
+/* 引導聚焦：一鍵流程找不到船時閃爍船選單 */
+.flash-attn {
+  animation: flash-attn 0.65s ease-in-out 4;
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+@keyframes flash-attn {
+  50% {
+    outline-color: transparent;
+  }
+}
+

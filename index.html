@@ -98,7 +98,7 @@
                 <button type="button" id="autoFillBtn" class="btn-primary">
                   自動填充: ON
                 </button>
-                <button type="button" id="autoAllocBtn" class="btn-orange">
+                <button type="button" id="autoAllocBtn" class="btn-orange" title="依你的優先自動產生可證最優方案">
                   🎯 自動配
                 </button>
                 <input
@@ -109,6 +109,13 @@
                 />
               </div>
             </div>
+          </div>
+          <div id="quickStartBar" class="quick-start" hidden>
+            <span class="qs-title">🚀 三秒開始</span>
+            <span class="qs-text">右側選好你的船，然後</span>
+            <button type="button" id="quickAutoBtn">⚡ 一鍵自動配</button>
+            <span class="qs-sub">依船型自動帶入優先（排／砲＝戰・商／冒險＝帆浪）並直接產生可證最優方案</span>
+            <button type="button" id="quickStartDismiss" class="qs-dismiss" aria-label="不再顯示" title="不再顯示">×</button>
           </div>
           <div id="rounds" class="round-list"></div>
         </section>

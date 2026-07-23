@@ -985,10 +985,66 @@
     openAutoPlanModal(dedupedPlans, maxR, ctx);
   }
 
+  /** 一鍵優先推薦：清空後套用指定優先（皆為 1＝同等最優先） */
+  function applyPriorityPreset(map, label) {
+    attrPriority = Object.fromEntries(ATTRS.map((a) => [a, ""]));
+    for (const [a, p] of Object.entries(map)) {
+      if (ATTRS.includes(a)) attrPriority[a] = p;
+    }
+    // 純帆時不寫入槳力優先
+    if (isPureSailProfile()) attrPriority["槳力"] = "";
+    renderAll();
+    const used = ATTRS.filter((a) => attrPriority[a] !== "")
+      .map((a) => `${a}${attrPriority[a]}`)
+      .join("·");
+    toast(`${label}：${used || "（無）"}`);
+  }
+
+  /** 一鍵自動配：已選船 → 依船型自動帶優先直接產生方案；未選船 → 引導到船選單 */
+  function quickAutoConfig() {
+    if (!selectedShipKey) {
+      toast("請先在右側「套用船隻上限」選擇你的船 →");
+      const sel = $("#shipLimitSelector");
+      if (sel) {
+        sel.scrollIntoView({ behavior: "smooth", block: "center" });
+        sel.classList.add("flash-attn");
+        setTimeout(() => sel.classList.remove("flash-attn"), 2600);
+      }
+      return;
+    }
+    const type = selectedShipKey.split("|")[0];
+    if (type === "排船" || type === "砲船") {
+      applyPriorityPreset({ 轉向: 1, 護甲: 1, 船耐: 1 }, "戰優先（依船型）");
+    } else {
+      applyPriorityPreset({ 橫帆: 1, 縱帆: 1, 抗浪: 1 }, "商／冒險優先（依船型）");
+    }
+    runAutoAllocate();
+  }
+
+  /** 快速開始引導條：尚無任何進度且未關閉時顯示 */
+  function updateQuickStart() {
+    const bar = $("#quickStartBar");
+    if (!bar) return;
+    let dismissed = false;
+    try {
+      dismissed = localStorage.getItem("gvlShip_qsDismiss") === "1";
+    } catch {
+      /* ignore */
+    }
+    bar.hidden = dismissed || hasExistingProgress();
+  }
+
   /**
    * 自動配：先選從頭／接著 → 多方案雷達 → 回填主表
    */
   function runAutoAllocate() {
+    // 用過一次後停止按鈕脈動提示
+    $("#autoAllocBtn")?.classList.add("auto-used");
+    try {
+      localStorage.setItem("gvlShip_autoUsed", "1");
+    } catch {
+      /* ignore */
+    }
     const maxR = Number(maxEnhanceCount);
     if (!Number.isFinite(maxR) || maxR < 1) {
       toast("請先設定強化次數上限（至少 1）");
@@ -1467,6 +1523,7 @@
     renderSummary();
     updateToolbarLabels();
     syncEnhanceCountInput();
+    updateQuickStart();
   }
 
   function updateToolbarLabels() {
@@ -1516,6 +1573,16 @@
     });
 
     $("#autoAllocBtn")?.addEventListener("click", runAutoAllocate);
+    $("#quickAutoBtn")?.addEventListener("click", quickAutoConfig);
+    $("#quickStartDismiss")?.addEventListener("click", () => {
+      try {
+        localStorage.setItem("gvlShip_qsDismiss", "1");
+      } catch {
+        /* ignore */
+      }
+      updateQuickStart();
+      toast("已隱藏快速開始（重設瀏覽器資料可復原）");
+    });
 
     $("#autoModeClose")?.addEventListener("click", () => {
       terminateActiveAutoAllocWorker();
@@ -1556,21 +1623,6 @@
       maxEnhanceCount = e.target.value;
       renderRounds();
     });
-
-    /** 一鍵優先推薦：清空後套用指定優先（皆為 1＝同等最優先） */
-    function applyPriorityPreset(map, label) {
-      attrPriority = Object.fromEntries(ATTRS.map((a) => [a, ""]));
-      for (const [a, p] of Object.entries(map)) {
-        if (ATTRS.includes(a)) attrPriority[a] = p;
-      }
-      // 純帆時不寫入槳力優先
-      if (isPureSailProfile()) attrPriority["槳力"] = "";
-      renderAll();
-      const used = ATTRS.filter((a) => attrPriority[a] !== "")
-        .map((a) => `${a}${attrPriority[a]}`)
-        .join("·");
-      toast(`${label}：${used || "（無）"}`);
-    }
 
     $("#priPresetTrade")?.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -2511,6 +2563,14 @@
     initShipLimitSelector();
     rounds = [emptyRound()];
     bindStatic();
+    // 用過自動配的老手不再脈動提示
+    try {
+      if (localStorage.getItem("gvlShip_autoUsed") === "1") {
+        $("#autoAllocBtn")?.classList.add("auto-used");
+      }
+    } catch {
+      /* ignore */
+    }
     renderFilters();
     renderAll();
     renderPresetList();
