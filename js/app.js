@@ -232,11 +232,64 @@
     }
   }
 
-  /** 本輪自動配共用的 maxBurst 快取（一次窮舉填多屬性） */
+  /** 本輪自動配共用的 maxBurst 與 gains 快取（一次窮舉填多屬性） */
   let maxBurstCache = null;
+  let gainsCache = null;
 
   function clearMaxBurstCache() {
     maxBurstCache = null;
+    gainsCache = null;
+  }
+
+  function getAttrGains(attr) {
+    if (!gainsCache) gainsCache = {};
+    if (gainsCache[attr]) return gainsCache[attr];
+    const set = new Set();
+    forEachFourCombo((ids, cap) => {
+      const c = cap[attr] || 0;
+      if (c > 0) set.add(c);
+    });
+    gainsCache[attr] = Array.from(set);
+    return gainsCache[attr];
+  }
+
+  /**
+   * 離散可達天花板 pre：在 parkRounds 輪內，從 start 出發可達的最大累計數值 s (start <= s <= L-1)
+   */
+  function reachablePre(attr, { start = 0, parkRounds = 0 } = {}) {
+    const L = getAttrLimit(attr);
+    if (L == null || L <= 0 || start >= L || parkRounds <= 0) {
+      return start;
+    }
+    const gains = getAttrGains(attr);
+    if (!gains.length) return start;
+
+    const size = L - start;
+    const minRounds = new Int32Array(size).fill(999999);
+    minRounds[0] = 0;
+
+    for (let i = 0; i < size; i++) {
+      const r = minRounds[i];
+      if (r >= parkRounds) continue;
+      const curVal = start + i;
+      for (let j = 0; j < gains.length; j++) {
+        const g = gains[j];
+        const nextVal = curVal + g;
+        if (nextVal < L) {
+          const nextIdx = nextVal - start;
+          if (r + 1 < minRounds[nextIdx]) {
+            minRounds[nextIdx] = r + 1;
+          }
+        }
+      }
+    }
+
+    for (let i = size - 1; i >= 0; i--) {
+      if (minRounds[i] <= parkRounds) {
+        return start + i;
+      }
+    }
+    return start;
   }
 
   /**
@@ -274,38 +327,52 @@
   }
 
   /**
-   * 單軸理論最高：先貼上限-1，再 + maxBurst
-   * final = (L-1) + burst，over = final - L = burst - 1（L≥1）
+   * 單軸離散可達頂：先以 DP 計算 parkRounds(= budget - 1) 輪內離散可達 pre，再 + maxBurst
+   * final = pre + burst，over = final - L
    */
-  function theoreticalPeak(attr) {
+  function theoreticalPeak(attr, opts = {}) {
+    const start = typeof opts === "object" && opts && opts.start != null ? opts.start : 0;
+    const budget =
+      typeof opts === "object" && opts && opts.budget != null
+        ? opts.budget
+        : Number(maxEnhanceCount) || 30;
     const L = getAttrLimit(attr);
     if (L == null) return null;
     if (L <= 0) {
       return { attr, limit: L, pre: 0, burst: 0, final: 0, over: 0 };
     }
+    // 已封頂（如接著配時 start ≥ 上限）：不可再強化，決勝加成歸零
+    if (start >= L) {
+      return {
+        attr,
+        limit: L,
+        pre: start,
+        burst: 0,
+        final: start,
+        over: Math.max(0, start - L),
+        sealed: true,
+      };
+    }
     const { burst, parts } = computeMaxBurst(attr);
-    const pre = L - 1;
+    const pre = reachablePre(attr, { start, parkRounds: Math.max(0, budget - 1) });
     const final = pre + burst;
     const over = Math.max(0, final - L);
     return { attr, limit: L, pre, burst, final, over, parts };
   }
 
-  function formatPeakSummary(targets, startTotals) {
+  function formatPeakSummary(targets, startTotals, budget = Number(maxEnhanceCount) || 30) {
     if (!targets.length) return "";
     ensureMaxBurstCache(targets);
     const base = startTotals || Object.fromEntries(ATTRS.map((a) => [a, 0]));
     const lines = targets.map((a) => {
-      const p = theoreticalPeak(a);
       const cur = base[a] || 0;
+      const p = theoreticalPeak(a, { start: cur, budget });
       if (!p) return `${a}（無上限）目前 ${cur}`;
       if (p.limit <= 0) return `${a} 上限0（不可強）`;
       if (cur >= p.limit) {
         return `${a} 目前 ${cur}（已封／≥上限${p.limit}）`;
       }
-      // 從目前值出發：若已可決勝則目前+burst，否則仍以理論天花板為目標
-      const fromHere =
-        cur >= p.pre ? cur + p.burst : p.final;
-      return `${a} 目前${cur}／上限${p.limit}→可衝<strong>${fromHere}</strong>（理論頂${p.final}，決勝+${p.burst}）`;
+      return `${a} 目前${cur}／上限${p.limit}→可衝<strong>${p.final}</strong>（決勝+${p.burst}）`;
     });
     return lines.join("<br/>");
   }
@@ -487,7 +554,8 @@
         // 必須對優先有增益，才考慮（避免分數被非優先懲罰打成 0 而整案失敗）
         if (focusGain <= 0) return;
         for (const a of ATTRS) {
-          if (!isAutoAllocTarget(a)) s -= (cap[a] || 0) * 3;
+          // ponytail: 0.001 使極端優先權重(1/99)下也壓不過最小真實差距
+          if (!isAutoAllocTarget(a)) s += (cap[a] || 0) * 0.001;
         }
         if (
           s > bestScore ||
@@ -619,19 +687,23 @@
         }
         if (focusGain <= 0 && seals === 0 && progress === 0) return;
 
-        // 非優先加成當輕微浪費（不可壓過有效進度）
+        let nonPriGain = 0;
         for (const a of ATTRS) {
-          if (!isAutoAllocTarget(a)) waste += (cap[a] || 0) * 0.2;
+          if (!isAutoAllocTarget(a)) nonPriGain += cap[a] || 0;
         }
 
-        const key = [seals, progress, -waste];
+        const key = [seals, progress, -waste, nonPriGain];
         const better =
           !bestKey ||
           key[0] > bestKey[0] ||
           (key[0] === bestKey[0] && key[1] > bestKey[1]) ||
           (key[0] === bestKey[0] &&
             key[1] === bestKey[1] &&
-            key[2] > bestKey[2]);
+            key[2] > bestKey[2]) ||
+          (key[0] === bestKey[0] &&
+            key[1] === bestKey[1] &&
+            key[2] === bestKey[2] &&
+            key[3] > bestKey[3]);
         if (better) {
           bestKey = key;
           bestIds = ids.slice();
@@ -691,7 +763,7 @@
    * 只依「使用者填的優先」產生多組自動配策略（排列組合）。
    * 例：護甲1／船耐1／轉向1 → 均衡超限 + 偏重各軸 + 不同攻頂順序
    */
-  function buildUserPriorityStrategies() {
+  function buildUserPriorityStrategies(budget = Number(maxEnhanceCount) || 30, opts = {}) {
     const targets = userPriorityAttrs();
     if (!targets.length) return [];
 
@@ -758,25 +830,32 @@
       order: targets.slice(),
     });
 
-    // 先算各優先理論最高，供方案說明與「衝高單軸」
+    // 先算各優先可達最高，供方案說明與「衝高單軸」
     ensureMaxBurstCache(targets);
+    const startTotals = opts.startTotals || null;
     const peaks = Object.fromEntries(
-      targets.map((a) => [a, theoreticalPeak(a)])
+      targets.map((a) => [
+        a,
+        theoreticalPeak(a, {
+          start: (startTotals && startTotals[a]) || 0,
+          budget,
+        }),
+      ])
     );
 
-    // ★ 每個優先屬性各一組：專攻到該軸理論最高（先做該軸再做其餘）
+    // ★ 每個優先屬性各一組：專攻到該軸可達最高（先做該軸再做其餘）
     for (const a of targets) {
       const peak = peaks[a];
       const rest = targets.filter((x) => x !== a);
       const order = [a, ...rest];
       const peakTxt =
         peak && peak.limit > 0
-          ? `理論最高 ${peak.final}（超+${peak.over}）`
+          ? `可達最高 ${peak.final}（超+${peak.over}）`
           : "無有效上限";
       push({
         id: `proven-peak-${a}`,
         name: `★ 最高${a}`,
-        desc: `專攻${a}到單軸理論最高：${peakTxt}；其餘優先其後再做`,
+        desc: `專攻${a}到單軸可達最高：${peakTxt}；其餘優先其後再做`,
         mode: "proven",
         order,
         peakAttr: a,
@@ -1009,11 +1088,9 @@
       }
     }
 
-    // 懲罰非優先順便成長（嚴格超限時懲罰更重）
-    const pen = maxOver ? 22 : 14;
     for (const a of enhanceableAttrs(totals)) {
       if (isAutoAllocTarget(a)) continue;
-      score -= (cap[a] || 0) * pen;
+      score += (cap[a] || 0) * 0.001;
     }
     return { valid, score, cap };
   }
@@ -1049,9 +1126,10 @@
             for (const a of focus) {
               fb += (cap[a] || 0) * strategyWeight(a, strategy);
             }
-            // 後備也略懲罰非優先
+            // 後備非優先極弱加分
             for (const a of ATTRS) {
-              if (!isAutoAllocTarget(a)) fb -= (cap[a] || 0) * 0.15;
+              // fb 本身無放大倍率，tiebreak 需再低一階才不會反轉
+              if (!isAutoAllocTarget(a)) fb += (cap[a] || 0) * 0.00001;
             }
             if (fb > fallbackScore) {
               fallbackScore = fb;
@@ -1192,7 +1270,8 @@
     </svg>`;
   }
 
-  function formatPlanStats(totals, roundCount, maxR) {
+  function formatPlanStats(totals, roundCount, maxR, budget, startTotals) {
+    const bg = budget != null ? budget : maxR;
     const axes = chartAttrs();
     const bits = axes.map((a) => {
       const v = totals[a] || 0;
@@ -1200,7 +1279,7 @@
       const mark = lim != null && v >= lim && lim > 0 ? "✓" : "";
       return `${SHORT[a]}${v}${mark}`;
     });
-    // 優先屬性超限合計 + 是否達理論最高
+    // 優先屬性超限合計 + 是否達可達最高
     let overSum = 0;
     const overBits = [];
     const peakBits = [];
@@ -1212,7 +1291,10 @@
         overSum += o;
         overBits.push(`${SHORT[a]}+${o}`);
       }
-      const peak = theoreticalPeak(a);
+      const peak = theoreticalPeak(a, {
+        budget: bg,
+        start: (startTotals && startTotals[a]) || 0,
+      });
       if (peak && peak.limit > 0 && v >= peak.final) {
         peakBits.push(`${SHORT[a]}滿`);
       } else if (peak && peak.limit > 0 && v > 0) {
@@ -1226,7 +1308,7 @@
           }</span>`
         : "";
     const peakLine = peakBits.length
-      ? `<br/><span style="color:var(--primary)">相對理論最高：${peakBits.join(
+      ? `<br/><span style="color:var(--primary)">相對可達最高：${peakBits.join(
           " · "
         )}</span>`
       : "";
@@ -1271,7 +1353,8 @@
     const isContinue = ctx && ctx.mode === "continue";
     const peakHtml = formatPeakSummary(
       targets,
-      isContinue ? ctx.startTotals : null
+      isContinue ? ctx.startTotals : null,
+      isContinue ? ctx.remaining : maxR
     );
     const modeLine = isContinue
       ? `模式：<b>接著配</b>（已強化 ${ctx.used} 次，再配最多 ${ctx.remaining} 輪）`
@@ -1298,13 +1381,26 @@
       const roundLabel = isContinue
         ? `新增 ${plan.roundCount} 輪（接在已有 ${ctx.used} 輪後）`
         : `輪次 <b>${plan.roundCount}</b>／${maxR}`;
+      const altHtml =
+        plan.altNames && plan.altNames.length
+          ? `<p class="plan-alt">同解策略：${escapeAttr(
+              plan.altNames.join("、")
+            )}</p>`
+          : "";
       return `<button type="button" class="auto-plan-card plan-user${
         isStop ? " plan-stop" : ""
       }" data-plan-idx="${idx}">
           <h4>${escapeAttr(s.name)}</h4>
           <p class="plan-desc">${escapeAttr(s.desc)}</p>
+          ${altHtml}
           ${buildRadarSvg(plan.totals)}
-          ${formatPlanStats(plan.totals, plan.roundCount, maxR).replace(
+          ${formatPlanStats(
+            plan.totals,
+            plan.roundCount,
+            maxR,
+            isContinue ? ctx.remaining : maxR,
+            isContinue ? ctx.startTotals : null
+          ).replace(
             /輪次 <b>\d+<\/b>／\d+/,
             roundLabel
           )}
@@ -1321,16 +1417,17 @@
       }
     }
     if (otherPlans.length) {
-      cardsHtml += `<div class="plan-section-label">其他方案（最高／嚴格超限等）</div>`;
+      cardsHtml += `<details class="plan-other-fold"><summary>其他方案（${otherPlans.length}）</summary>`;
       for (const p of otherPlans) {
         cardsHtml += cardHtml(p, idx++);
       }
+      cardsHtml += `</details>`;
     }
 
     list.innerHTML =
       (peakHtml
         ? `<div class="peak-summary"><div class="peak-title">各優先·可衝目標${
-            isContinue ? "（從目前數值起算）" : "（單軸理論最高）"
+            isContinue ? "（從目前數值起算）" : "（單軸可達最高）"
           }</div><div class="peak-body">${peakHtml}</div><div class="peak-hint">最上方分組為「超限即停／最省次數」；下方為衝高與其他組合。</div></div>`
         : "") + cardsHtml;
 
@@ -1435,7 +1532,7 @@
 
     setTimeout(() => {
       clearMaxBurstCache();
-      const strategies = buildUserPriorityStrategies();
+      const strategies = buildUserPriorityStrategies(budget, opts);
       const plans = [];
       const seen = new Set();
       for (const strategy of strategies) {
@@ -1487,7 +1584,33 @@
         return over(q) - over(p);
       });
 
-      if (!plans.length) {
+      // 第二次去重：同結果不同策略名合併，保留排序後首見者
+      const dedupedPlans = [];
+      const seenSig2 = new Set();
+      for (const p of plans) {
+        const sig2 =
+          ATTRS.map((a) => p.totals[a] || 0).join(",") +
+          "|r" +
+          p.roundCount;
+        if (seenSig2.has(sig2)) {
+          const existing = dedupedPlans.find(
+            (dp) =>
+              ATTRS.map((a) => dp.totals[a] || 0).join(",") +
+                "|r" +
+                dp.roundCount ===
+              sig2
+          );
+          if (existing) {
+            if (!existing.altNames) existing.altNames = [];
+            existing.altNames.push(p.strategy.name);
+          }
+        } else {
+          seenSig2.add(sig2);
+          dedupedPlans.push(p);
+        }
+      }
+
+      if (!dedupedPlans.length) {
         toast(
           isContinue
             ? "無法接著配置：優先可能都已封頂，或剩餘次數不足"
@@ -1496,7 +1619,7 @@
         return;
       }
 
-      openAutoPlanModal(plans, maxR, ctx);
+      openAutoPlanModal(dedupedPlans, maxR, ctx);
     }, 30);
   }
 

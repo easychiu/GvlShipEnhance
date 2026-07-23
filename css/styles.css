@@ -1216,3 +1216,18 @@ button:active {
     flex-wrap: wrap;
   }
 }
+
+.plan-alt {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+
+details.plan-other-fold summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+  padding: 8px 0;
+  user-select: none;
+}
+
