@@ -1310,16 +1310,27 @@
         </button>`;
     };
 
+    let cardsHtml = "";
+    let idx = 0;
+    if (stopPlans.length) {
+      cardsHtml += `<div class="plan-section-label">超限即停（優先全過上限就停 · 不硬用完次數）</div>`;
+      for (const p of stopPlans) {
+        cardsHtml += cardHtml(p, idx++);
+      }
+    }
+    if (otherPlans.length) {
+      cardsHtml += `<div class="plan-section-label">其他方案（最高／嚴格超限等）</div>`;
+      for (const p of otherPlans) {
+        cardsHtml += cardHtml(p, idx++);
+      }
+    }
+
     list.innerHTML =
       (peakHtml
         ? `<div class="peak-summary"><div class="peak-title">各優先·可衝目標${
             isContinue ? "（從目前數值起算）" : "（單軸理論最高）"
-          }</div><div class="peak-body">${peakHtml}</div><div class="peak-hint">「★ 最高Ｘ」專攻該軸；「★ 優先超限即停／最省次數」全優先達上限就停。</div></div>`
-        : "") +
-      (stopPlans.length
-        ? `<div class="plan-section-label">超限即停（優先全過上限就停）</div>`
-        : "") +
-      ordered.map((p, i) => cardHtml(p, i)).join("");
+          }</div><div class="peak-body">${peakHtml}</div><div class="peak-hint">最上方分組為「超限即停／最省次數」；下方為衝高與其他組合。</div></div>`
+        : "") + cardsHtml;
 
     const intro = document.querySelector(".auto-plan-intro");
     if (intro) {
