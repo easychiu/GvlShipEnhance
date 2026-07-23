@@ -711,9 +711,11 @@ button:active {
 }
 
 /* ---- auto plan modal ---- */
-.modal-card-wide {
-  max-width: min(960px, 96vw);
-  width: 100%;
+/* 雙類別拉高權重：檔案後方的 .modal-card { width:440px } 會蓋掉單類別的 width，
+   造成寬版彈窗實際只有 440px（陳年 bug）。依使用者回饋放大並修正。 */
+.modal-card.modal-card-wide {
+  width: min(1400px, 96vw);
+  max-width: 96vw;
 }
 
 .auto-plan-intro {
@@ -846,9 +848,9 @@ button:active {
 
 .auto-plan-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
-  max-height: min(70vh, 560px);
+  max-height: 78vh;
   overflow: auto;
   padding: 2px;
 }
@@ -1221,13 +1223,5 @@ button:active {
   font-size: 12px;
   color: var(--muted);
   margin: 4px 0 0;
-}
-
-details.plan-other-fold summary {
-  cursor: pointer;
-  font-weight: 600;
-  color: var(--text);
-  padding: 8px 0;
-  user-select: none;
 }
 

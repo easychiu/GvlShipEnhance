@@ -455,10 +455,15 @@
         budget: bg,
         start: (startTotals && startTotals[a]) || 0,
       });
-      if (peak && peak.limit > 0 && v >= peak.final) {
-        peakBits.push(`${SHORT[a]}滿`);
-      } else if (peak && peak.limit > 0 && v > 0) {
-        peakBits.push(`${SHORT[a]}${v}/${peak.final}`);
+      if (peak && peak.limit > 0) {
+        // 極限＝規則天花板 (上限-1)+決勝；與「目前零件可達」不同時並列顯示
+        const ceiling = peak.limit - 1 + peak.burst;
+        const ceilTxt = ceiling > peak.final ? `(極限${ceiling})` : "";
+        if (v >= peak.final) {
+          peakBits.push(`${SHORT[a]}滿${ceilTxt}`);
+        } else if (v > 0) {
+          peakBits.push(`${SHORT[a]}${v}/${peak.final}${ceilTxt}`);
+        }
       }
     }
     const overLine =
@@ -578,11 +583,11 @@
       const foldedTitle = foldedHasMin
         ? `單軸最高與參考（${otherPlans.length}）`
         : `單軸最高（${otherPlans.length}）`;
-      cardsHtml += `<details class="plan-other-fold"><summary>${foldedTitle}</summary>`;
+      // 依使用者回饋：不摺疊，全部平鋪（彈窗已放大）
+      cardsHtml += `<div class="plan-section-label">${foldedTitle}</div>`;
       for (const p of otherPlans) {
         cardsHtml += cardHtml(p, idx++);
       }
-      cardsHtml += `</details>`;
     }
 
     list.innerHTML =
