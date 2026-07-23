@@ -158,7 +158,7 @@
               </button>
             </div>
             <span class="hint-inline"
-              >每輪 4 零件。自動配只依你填的優先產生多組組合（雷達圖），選一個回填即可。</span
+              >每輪 4 零件。自動配只依你填的優先產生可證最優方案（雷達圖），選一個回填即可。</span
             >
           </div>
           <div id="summary" class="summary-list"></div>
@@ -225,6 +225,13 @@
           <code>&lt;li&gt;</code> 即可。
         </p>
         <ul class="changelog-list" id="changelogList">
+          <li>
+            <time datetime="2026-07-23">2026-07-23</time>
+            <div>
+              <strong>自動配 2.0：精確求解器取代啟發式策略</strong>
+              最少輪數／字典序目標（優先1全到頂→2最高→超限最大）／單軸最高皆標示可證最優；原 20+ 策略卡退役。計算移至背景執行緒，介面不凍結。可衝目標並列顯示「目前零件可達」與「規則極限」（如船耐 1310／極限 1314）。
+            </div>
+          </li>
           <li>
             <time datetime="2026-07-23">2026-07-23</time>
             <div>
@@ -540,6 +547,7 @@
     <div id="toast" class="toast" role="status"></div>
 
     <script src="js/data.js"></script>
+    <script src="js/autoAlloc.js"></script>
     <script src="js/app.js"></script>
   </body>
 </html>
