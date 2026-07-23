@@ -416,6 +416,119 @@
   }
 
   /**
+   * 優先超限即停：只衝有填優先的屬性，全部 ≥ 上限（超限/封頂）後立刻停止，
+   * 不硬用完剩餘強化次數。
+   * stopMode: "parallel" 同步衝｜"serial" 依優先序逐軸
+   */
+  function simulatePriorityOvershootStop(strategyMeta, maxR, opts = {}) {
+    const startTotals =
+      opts.startTotals || Object.fromEntries(ATTRS.map((a) => [a, 0]));
+    const maxNew =
+      opts.maxNewRounds != null ? opts.maxNewRounds : maxR;
+    const totals = { ...startTotals };
+    const planRounds = [];
+    const order =
+      Array.isArray(strategyMeta.order) && strategyMeta.order.length
+        ? strategyMeta.order
+        : userPriorityAttrs();
+    const serial = strategyMeta.stopMode === "serial";
+
+    const openPriority = () =>
+      order.filter(
+        (a) => isAutoAllocTarget(a) && canEnhanceAttr(totals[a] || 0, a)
+      );
+
+    const applyParts = (parts, note) => {
+      if (!parts || parts.length !== SLOTS) return false;
+      if (planRounds.length >= maxNew) return false;
+      const round = emptyRound();
+      round.parts = parts.slice();
+      const cap = roundPartCap(round);
+      const delta = Object.fromEntries(ATTRS.map((a) => [a, 0]));
+      const focusNow = openPriority();
+      for (const a of ATTRS) {
+        if (!canEnhanceAttr(totals[a] || 0, a)) {
+          delta[a] = 0;
+        } else {
+          delta[a] = cap[a] || 0;
+        }
+        totals[a] = (totals[a] || 0) + delta[a];
+      }
+      // 至少要有一項「當前優先目標」有增量
+      if (!focusNow.some((a) => (delta[a] || 0) > 0)) return false;
+      if (cumulativeMode) round.values = { ...totals };
+      else round.values = { ...delta };
+      round.note = note;
+      planRounds.push(round);
+      return true;
+    };
+
+    const pickForFocus = (focus) => {
+      if (!focus.length) return null;
+      let bestIds = null;
+      let bestScore = -Infinity;
+      forEachFourCombo((ids, cap) => {
+        let s = 0;
+        for (const a of focus) {
+          const C = cap[a] || 0;
+          const P = totals[a] || 0;
+          const L = getAttrLimit(a);
+          const w = 1 / (getAutoPriority(a) || 1);
+          s += C * w * 100;
+          // 本輪能達/超上限者大加分（盡快走完優先）
+          if (L != null && P + C >= L) s += (C + (P + C - L)) * w * 250;
+        }
+        for (const a of ATTRS) {
+          if (!isAutoAllocTarget(a)) s -= (cap[a] || 0) * 12;
+        }
+        if (s > bestScore) {
+          bestScore = s;
+          bestIds = ids.slice();
+        }
+      });
+      return bestScore > 0 ? bestIds : null;
+    };
+
+    if (serial) {
+      for (const attr of order) {
+        while (
+          planRounds.length < maxNew &&
+          isAutoAllocTarget(attr) &&
+          canEnhanceAttr(totals[attr] || 0, attr)
+        ) {
+          const parts = pickForFocus([attr]);
+          if (!parts) break;
+          const ok = applyParts(
+            parts,
+            `${strategyMeta.name} · ${attr}（超限即停）`
+          );
+          if (!ok) break;
+        }
+      }
+    } else {
+      while (planRounds.length < maxNew) {
+        const focus = openPriority();
+        // 有填優先的全部已達/超上限 → 立刻停
+        if (!focus.length) break;
+        const parts = pickForFocus(focus);
+        if (!parts) break;
+        const ok = applyParts(
+          parts,
+          `${strategyMeta.name} #${planRounds.length + 1}`
+        );
+        if (!ok) break;
+      }
+    }
+
+    return {
+      strategy: strategyMeta,
+      rounds: planRounds,
+      totals: { ...totals },
+      roundCount: planRounds.length,
+    };
+  }
+
+  /**
    * 只依「使用者填的優先」產生多組自動配策略（排列組合）。
    * 例：護甲1／船耐1／轉向1 → 均衡超限 + 偏重各軸 + 不同攻頂順序
    */
@@ -449,6 +562,24 @@
       });
       return w;
     };
+
+    // ★ 優先超限即停：只配優先，全超限後停，不耗剩餘次數
+    push({
+      id: "priority-stop-parallel",
+      name: "★ 優先超限即停",
+      desc: `只衝有填優先（${priLabel}），全部達/超上限後立刻停止，不硬用完剩餘次數`,
+      mode: "priority-stop",
+      stopMode: "parallel",
+      order: targets.slice(),
+    });
+    push({
+      id: "priority-stop-serial",
+      name: "★ 優先超限即停（依序）",
+      desc: `依優先序逐軸衝到超限再下一軸（${priLabel}），全做完即停`,
+      mode: "priority-stop",
+      stopMode: "serial",
+      order: targets.slice(),
+    });
 
     // 先算各優先理論最高，供方案說明與「衝高單軸」
     ensureMaxBurstCache(targets);
@@ -768,6 +899,9 @@
           : userPriorityAttrs();
       return simulateProvenMaxBurst(order, maxR, strategy, opts);
     }
+    if (strategy.mode === "priority-stop") {
+      return simulatePriorityOvershootStop(strategy, maxR, opts);
+    }
 
     const startTotals =
       opts.startTotals || Object.fromEntries(ATTRS.map((a) => [a, 0]));
@@ -779,6 +913,7 @@
     for (let r = 0; r < maxNew; r++) {
       const roundsLeft = maxNew - r;
       const focus = strategyFocusAttrs(totals, strategy);
+      // 僅優先可強化；全封則停（不硬用完次數）
       if (!focus.length) break;
 
       const chosen = pickBestFourParts(totals, roundsLeft, strategy);
@@ -1109,7 +1244,11 @@
             const v = plan.totals[a] || 0;
             if (lim != null && v > lim) s += v - lim;
           }
-          if (plan.strategy.mode === "proven") s += 0.5;
+          // 同樣超限時：輪數少（超限即停）略優先；proven 次之
+          if (plan.strategy.mode === "priority-stop") {
+            s += 1;
+            s += Math.max(0, 20 - plan.roundCount) * 0.01;
+          } else if (plan.strategy.mode === "proven") s += 0.5;
           else if (plan.strategy.maximizeOvershoot) s += 0.01;
           return s;
         };
