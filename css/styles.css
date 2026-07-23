@@ -240,6 +240,44 @@ textarea {
   margin-left: auto;
 }
 
+.part-mask-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--soft-bg);
+  max-width: min(100%, 520px);
+}
+
+.part-mask-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-right: 2px;
+}
+
+.part-mask-btn {
+  padding: 3px 8px !important;
+  font-size: 12px !important;
+  border-radius: 999px !important;
+  min-width: 2em;
+}
+
+.part-mask-btn.active {
+  background: var(--warning-bg) !important;
+  border-color: var(--warning) !important;
+  color: var(--on-accent) !important;
+}
+
+.part-mask-clear {
+  font-size: 11px !important;
+  padding: 3px 8px !important;
+  color: var(--muted);
+}
+
 button,
 .filter-btn {
   background: var(--btn-bg);

@@ -73,6 +73,14 @@
                 <button type="button" id="addRoundBtn" class="btn-primary">
                   ＋ 新增輪次
                 </button>
+                <div
+                  class="part-mask-group"
+                  id="partMaskGroup"
+                  title="本輪材料遮罩：點選屬性後，零件下拉只顯示有該加成的材料；可多選（符合任一即可）"
+                >
+                  <span class="part-mask-label">材料遮罩</span>
+                  <!-- 由 JS 依 uiAttrs 渲染 -->
+                </div>
                 <button type="button" id="exportBtn" class="btn-blue">
                   📥 匯出
                 </button>
@@ -217,6 +225,13 @@
           <code>&lt;li&gt;</code> 即可。
         </p>
         <ul class="changelog-list" id="changelogList">
+          <li>
+            <time datetime="2026-07-23">2026-07-23</time>
+            <div>
+              <strong>材料遮罩</strong>
+              「新增輪次」旁可點屬性縮寫（橫/縱/轉…）過濾零件下拉，只顯示有該加成的材料；可多選。
+            </div>
+          </li>
           <li>
             <time datetime="2026-07-23">2026-07-23</time>
             <div>
@@ -422,6 +437,10 @@
           <p>
             <strong>17. 匯出圖片：</strong>
             工具列「🖼️ 匯出圖片」可下載 PNG，內容含最終屬性、各輪強化材料與數值。
+          </p>
+          <p>
+            <strong>18. 材料遮罩：</strong>
+            「新增輪次」右側可點屬性縮寫過濾零件；例如只開「轉」則下拉只顯示有轉向加成的材料。可多選，符合任一即可；「清除」取消遮罩。
           </p>
         </div>
         <div class="modal-actions">

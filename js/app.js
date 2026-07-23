@@ -15,6 +15,8 @@
   /** @type {{ parts: (string|number)[], values: Record<string, number>, locks: Record<string, boolean>, note: string }[]} */
   let rounds = [];
   let filterAttr = null;
+  /** 材料遮罩：選中的屬性（有任一加成即顯示）；空 = 不遮罩 */
+  let partMaskAttrs = new Set();
   let cumulativeMode = true; // true=累計顯示總值, false=拆分顯示本輪增量
   let autoFill = true;
   let showAllAttrs = true;
@@ -1725,12 +1727,23 @@
     return changed;
   }
 
+  /** 零件是否通過材料遮罩（遮罩為空=全過；有選屬性=至少一項加成>0） */
+  function passesPartMask(p) {
+    if (!partMaskAttrs.size) return true;
+    for (const a of partMaskAttrs) {
+      if ((p.bonus[a] || 0) > 0) return true;
+    }
+    return false;
+  }
+
   function partOptionsHtml(selected, filter, takenIds) {
     const taken = takenIds || new Set();
     const pure = isPureSailProfile();
     let list = Object.values(PARTS);
     // 純帆：不可選有槳力加成的零件
     if (pure) list = list.filter((p) => !isPaddlePart(p));
+    // 材料遮罩：只顯示對選中屬性有加成的零件
+    list = list.filter((p) => passesPartMask(p));
     const filtered = filter
       ? list.filter((p) => (p.bonus[filter] || 0) > 0)
       : list;
@@ -1744,7 +1757,7 @@
       const sel = String(selected) === id ? " selected" : "";
       opts.push(`<option value="${p.id}"${sel}>${partOptionLabel(p)}</option>`);
     }
-    // 篩選時仍保留目前已選但不符條件的零件（純帆不保留槳零件）
+    // 篩選/遮罩時仍保留目前已選但不符條件的零件（純帆不保留槳零件）
     if (selected && !listed.has(String(selected)) && PARTS[String(selected)]) {
       if (!(pure && isPaddlePart(selected))) {
         const p = PARTS[String(selected)];
@@ -1754,6 +1767,27 @@
       }
     }
     return opts.join("");
+  }
+
+  function renderPartMask() {
+    const group = $("#partMaskGroup");
+    if (!group) return;
+    // 純帆時遮罩不含槳力
+    const attrs = uiAttrs();
+    // 清掉已不存在於 uiAttrs 的遮罩（如純帆的槳）
+    for (const a of [...partMaskAttrs]) {
+      if (!attrs.includes(a)) partMaskAttrs.delete(a);
+    }
+    const chips = attrs
+      .map((a) => {
+        const on = partMaskAttrs.has(a) ? " active" : "";
+        return `<button type="button" class="part-mask-btn filter-btn${on}" data-mask-attr="${a}" title="只顯示有「${a}」加成的零件">${SHORT[a] || a}</button>`;
+      })
+      .join("");
+    const clearBtn = partMaskAttrs.size
+      ? `<button type="button" class="part-mask-clear btn-ghost" data-mask-clear="1" title="清除遮罩">清除</button>`
+      : "";
+    group.innerHTML = `<span class="part-mask-label">材料遮罩</span>${chips}${clearBtn}`;
   }
 
   function renderRounds() {
@@ -1943,6 +1977,7 @@
 
   function renderAll() {
     if (isPureSailProfile()) stripPaddleForPureSail();
+    renderPartMask();
     renderRounds();
     renderSummary();
     updateToolbarLabels();
@@ -1968,6 +2003,31 @@
       const r = emptyRound();
       rounds.push(r);
       renderAll();
+    });
+
+    // 材料遮罩：點屬性縮寫切換；可多選（符合任一有加成即顯示）
+    $("#partMaskGroup")?.addEventListener("click", (e) => {
+      const clear = e.target.closest("[data-mask-clear]");
+      if (clear) {
+        partMaskAttrs.clear();
+        renderAll();
+        toast("已清除材料遮罩");
+        return;
+      }
+      const btn = e.target.closest("[data-mask-attr]");
+      if (!btn) return;
+      const a = btn.dataset.maskAttr;
+      if (!a) return;
+      if (partMaskAttrs.has(a)) partMaskAttrs.delete(a);
+      else partMaskAttrs.add(a);
+      renderAll();
+      if (partMaskAttrs.size) {
+        toast(
+          `材料遮罩：${[...partMaskAttrs].join("、")}（只顯示有加成的零件）`
+        );
+      } else {
+        toast("材料遮罩：顯示全部零件");
+      }
     });
 
     $("#autoAllocBtn")?.addEventListener("click", runAutoAllocate);
