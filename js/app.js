@@ -531,10 +531,15 @@
     const priCount = userPriorityAttrs().length;
     const isExpandedMode = (m) =>
       m === "exact-lex" || m === "exact-tradeoff" || (m === "exact-min" && priCount <= 2);
+    const isLegacyMode = (m) => m === "legacy";
     const stopPlans = plans.filter((p) => isExpandedMode(p.strategy.mode));
-    const otherPlans = plans.filter((p) => !isExpandedMode(p.strategy.mode));
-    // 列表順序：展開區 → 摺疊區（與 pendingAutoPlans 索引一致需重排）
-    const ordered = stopPlans.concat(otherPlans);
+    const legacyGroup = plans.filter((p) => isLegacyMode(p.strategy.mode));
+    const otherPlans = plans.filter(
+      (p) => !isExpandedMode(p.strategy.mode) && !isLegacyMode(p.strategy.mode)
+    );
+    // 列表順序（三段全平鋪，不摺疊）：推薦（可證）→ 單軸最高與參考 → 1.0 自動配方案
+    // （與 pendingAutoPlans 索引一致需重排，data-plan-idx 照此順序產生）
+    const ordered = stopPlans.concat(otherPlans).concat(legacyGroup);
     pendingAutoPlans = ordered;
 
     const cardHtml = (plan, idx) => {
@@ -586,6 +591,13 @@
       // 依使用者回饋：不摺疊，全部平鋪（彈窗已放大）
       cardsHtml += `<div class="plan-section-label">${foldedTitle}</div>`;
       for (const p of otherPlans) {
+        cardsHtml += cardHtml(p, idx++);
+      }
+    }
+    if (legacyGroup.length) {
+      // 2.0 精確求解器取代前的啟發式策略引擎，回歸並列參考；同結果已在上方精確卡標「同解策略」
+      cardsHtml += `<div class="plan-section-label">1.0 自動配方案（${legacyGroup.length}）</div>`;
+      for (const p of legacyGroup) {
         cardsHtml += cardHtml(p, idx++);
       }
     }
@@ -670,6 +682,8 @@
 
   /** exact-* 卡片排序：lex 恆最前；其餘依優先屬性數（<=2 或 >=3）決定，對應 openAutoPlanModal 分組 */
   function exactPlanRank(mode, priCount) {
+    // 1.0 legacy 方案恆排最後：兩個 priCount 分支既有最大值都是 3，這裡給 4 保證墊底
+    if (mode === "legacy") return 4;
     if (mode === "exact-lex") return 0;
     if (priCount <= 2) {
       if (mode === "exact-min") return 1;
@@ -846,7 +860,12 @@
         return;
       }
       if (msg.type === "done") {
-        finishOnce(() => finishAutoPlans(msg.result, targets, ctx, maxR, isContinue, startTotals));
+        if (msg.legacyError) {
+          console.error("AutoAllocLegacy worker 內部錯誤（不影響精確方案）", msg.legacyError);
+        }
+        finishOnce(() =>
+          finishAutoPlans(msg.result, targets, ctx, maxR, isContinue, startTotals, msg.legacyPlans)
+        );
       }
     };
     worker.postMessage(input);
@@ -857,7 +876,15 @@
     setTimeout(() => {
       try {
         const result = AutoAlloc.solve(input);
-        finishAutoPlans(result, targets, ctx, maxR, isContinue, input.startTotals);
+        // 1.0 legacy 方案：獨立 try/catch，掛掉不得影響精確結果（與 worker 行為一致）
+        let legacyPlans = [];
+        try {
+          legacyPlans = AutoAllocLegacy.solve(input).plans;
+        } catch (legacyErr) {
+          legacyPlans = [];
+          console.error("AutoAllocLegacy.solve（不影響精確方案）", legacyErr);
+        }
+        finishAutoPlans(result, targets, ctx, maxR, isContinue, input.startTotals, legacyPlans);
       } catch (err) {
         console.error("AutoAlloc.solve", err);
         toast("求解器發生錯誤，請檢查主控台");
@@ -868,7 +895,7 @@
   }
 
   /** Worker／同步兩條路徑共用：把 solve() 結果轉成現行 plan 形狀陣列並開 modal */
-  function finishAutoPlans(result, targets, ctx, maxR, isContinue, startTotals) {
+  function finishAutoPlans(result, targets, ctx, maxR, isContinue, startTotals, legacyPlans) {
     clearMaxBurstCache();
 
     // 優先屬性已全數封頂：lex 也是 0 輪空方案，無需規劃
@@ -934,6 +961,19 @@
         desc: `單軸 ${a} 衝 ${peak.final} ${provableTag(peak.provable, AUTOALLOC_BEAM_PEAK)}`,
         provable: peak.provable,
         rawPlan: peak.plan,
+      });
+    }
+
+    // 1.0 啟發式方案（回歸並列顯示）：接在精確方案之後，恆標非可證；同結果會在下方
+    // sig2 去重併入前面的精確卡「同解策略」（名稱已帶 1.0· 前綴，天然標註）
+    for (const p of legacyPlans || []) {
+      raw.push({
+        mode: "legacy",
+        id: "legacy-" + p.id,
+        name: "1.0·" + p.name,
+        desc: p.desc,
+        provable: false,
+        rawPlan: p,
       });
     }
 
